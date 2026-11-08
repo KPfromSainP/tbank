@@ -11,6 +11,7 @@
 
     <modules>
         <module>advanced</module>
+        <module>jcstress</module>
     </modules>
 
     <properties>

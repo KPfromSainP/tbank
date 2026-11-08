@@ -28,6 +28,7 @@ public final class CommandLineFactory {
                 .addSubcommand(new CompareCommand(config.getQuoteService()))
                 .addSubcommand(new MoversCommand(config.getQuoteSource()))
                 .addSubcommand(new HistoryCommand(config.getPriceHistory()))
-                .addSubcommand(new UpdateCommand(config.getApiClient()));
+                .addSubcommand(new UpdateCommand(config.getApiClient()))
+                .addSubcommand(new SubscriptionsCommand(config.getApiClient()));
     }
 }

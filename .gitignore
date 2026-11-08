@@ -13,3 +13,8 @@ target/
 
 # Claude Code tooling config
 .claude/
+
+# jcstress: generated experiment reports and raw results
+**/results/
+**/results-*/
+jcstress-results-*.bin.gz
