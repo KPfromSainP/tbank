@@ -4,7 +4,7 @@ import java.net.ServerSocket;
 import java.net.Socket;
 import java.util.concurrent.CountDownLatch;
 
-/** Legacy Socket.read: закрытие ресурса отменяет ожидание. Проверять ОС/стек через jcmd. */
+/** Блокирующее чтение Socket в платформенном потоке: interrupt не отменяет чтение, закрытие сокета завершает его. */
 public final class BlockingIoDemo {
     public static void main(String[] args) throws Exception {
         try (var server = new ServerSocket(0); var client = new Socket("127.0.0.1", server.getLocalPort());

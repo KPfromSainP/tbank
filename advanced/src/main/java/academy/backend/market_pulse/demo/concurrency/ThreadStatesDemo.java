@@ -5,8 +5,7 @@ import java.util.concurrent.locks.LockSupport;
 
 /** Оставляет потоки в наблюдаемых состояниях до Enter. getState не используется как рабочая синхронизация. */
 public final class ThreadStatesDemo {
-    // NOTICE: RUNNABLE в JVM включает и выполнение на CPU, и готовность к выполнению.
-    // getState — диагностический снимок; порядок выполнения им не согласовывают.
+    /** Условие завершения активного цикла и ожидания, видимое всем потокам опыта. */
     private static volatile boolean running = true;
     public static void main(String[] args) throws Exception {
         Object lock = new Object();
@@ -35,8 +34,7 @@ public final class ThreadStatesDemo {
                         new Object[]{parked, Thread.State.WAITING},
                         new Object[]{sleeper, Thread.State.TIMED_WAITING})) {
                     Thread t = (Thread) entry[0];
-                    long until = System.nanoTime() + 2_000_000_000L;
-                    while (t.getState() != entry[1] && System.nanoTime() < until) { Thread.yield(); }
+                    awaitState(t, (Thread.State) entry[1]);
                 }
                 System.out.println("PID=" + ProcessHandle.current().pid() + "; jcmd <pid> Thread.print; Enter — выход");
                 for (Thread t : List.of(fresh, busy, blocked, parked, sleeper, ended)) {
@@ -48,6 +46,15 @@ public final class ThreadStatesDemo {
             running = false;
             workers.forEach(Thread::interrupt);
             for (Thread t : workers) { t.join(); }
+        }
+    }
+
+    private static void awaitState(Thread thread, Thread.State expected) {
+        // NOTICE: RUNNABLE в виртуальной машине Java включает и выполнение на процессоре,
+        // и готовность к нему. getState — диагностический снимок, а не средство синхронизации.
+        long until = System.nanoTime() + 2_000_000_000L;
+        while (thread.getState() != expected && System.nanoTime() < until) {
+            Thread.yield();
         }
     }
 }

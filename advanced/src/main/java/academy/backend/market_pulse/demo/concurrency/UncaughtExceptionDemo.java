@@ -24,18 +24,17 @@ public final class UncaughtExceptionDemo {
                 || worker.getState() != Thread.State.TERMINATED) {
             throw new AssertionError("Обработчик должен получить ошибку, работник — завершиться");
         }
+        demonstrateHandlerDelegation();
+    }
+
+    /** Сравнивает делегирование группе и общему обработчику с индивидуальным обработчиком потока. */
+    private static void demonstrateHandlerDelegation() throws InterruptedException {
         Thread.UncaughtExceptionHandler previous = Thread.getDefaultUncaughtExceptionHandler();
         try {
             Thread.setDefaultUncaughtExceptionHandler((thread, error) ->
                     System.out.println("default handler: " + thread.getName() + ": " + error));
             // Это делегирование при отсутствии индивидуального handler, не вызов всех обработчиков.
-            ThreadGroup group = new ThreadGroup("demo-group") {
-                @Override
-                public void uncaughtException(Thread thread, Throwable error) {
-                    System.out.println("ThreadGroup: " + thread.getName() + ", делегируем родителю");
-                    super.uncaughtException(thread, error);
-                }
-            };
+            ThreadGroup group = new LoggingThreadGroup("demo-group");
             Thread other = new Thread(group, UncaughtExceptionDemo::fail, "group-handler-worker");
             other.start();
             other.join();

@@ -19,7 +19,9 @@ import org.openjdk.jcstress.infra.results.I_Result;
 @Outcome(expect = Expect.FORBIDDEN, desc = "Прочие исходы")
 @State
 public class PublicationVolatile {
+    /** Обычное поле данных, записываемое до установки флага готовности. */
     private int data;
+    /** Флаг публикации: чтение true делает предшествующую запись data видимой читателю. */
     private volatile boolean ready;
 
     @Actor

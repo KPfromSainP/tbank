@@ -4,83 +4,99 @@ import java.util.Objects;
 import java.util.function.Consumer;
 import java.util.concurrent.locks.LockSupport;
 
-/** Учебный фиксированный пул: LIFO, без Future, лимита очереди и гарантий справедливости. */
+/**
+ * Фиксированный набор платформенных потоков, извлекающих задачи из стека Трайбера.
+ * Последняя ожидающая задача выполняется первой; ограничений размера и гарантий справедливости нет.
+ */
 public final class TreiberThreadPool implements AutoCloseable {
+    /** Ожидающие задачи; закрытие стека одновременно запрещает дальнейшее добавление. */
     private final TreiberStack<Runnable> tasks = new TreiberStack<>();
-    private final Object lifecycle = new Object();
+    /** Все работники создаются до первого start; состав массива больше не меняется. */
     private final Thread[] workers;
+    /** Обработчик RuntimeException отдельных задач; такая ошибка не завершает работника. */
     private final Consumer<RuntimeException> onFailure;
-    // NOTICE: volatile публикует остановку всем worker, но не делает составные действия атомарными.
+    /** Видимый всем работникам запрос на выход из цикла выполнения. */
     private volatile boolean stopped;
 
+    /** Создаёт всех работников перед запуском, чтобы submit мог безопасно разбудить любого из них. */
     public TreiberThreadPool(int size, Consumer<RuntimeException> onFailure) {
         if (size <= 0) {
             throw new IllegalArgumentException("Число работников должно быть положительным");
         }
         this.onFailure = Objects.requireNonNull(onFailure);
         workers = new Thread[size];
-        for (int i = 0; i < size; i++) {
-            workers[i] = Thread.ofPlatform().name("quote-worker-" + (i + 1)).unstarted(this::work);
+        for (int index = 0; index < size; index++) {
+            workers[index] = Thread.ofPlatform().name("quote-worker-" + (index + 1)).unstarted(this::work);
         }
-        // Массив готов до запуска: submit может разбудить любого уже созданного worker.
         for (Thread worker : workers) {
             worker.start();
         }
     }
 
+    /** Передаёт задачу работникам; закрытый стек отклоняет её без общей блокировки. */
     public void submit(Runnable task) {
-        Objects.requireNonNull(task);
-        // NOTICE: один монитор согласует submit с shutdown: после закрытия новая задача не попадёт в стек.
-        synchronized (lifecycle) {
-            if (stopped) {
-                throw new IllegalStateException("Пул закрыт");
-            }
-            tasks.push(task);
-            // Учебное упрощение: будим всех. Permit сохраняет пробуждение до следующего park.
-            for (Thread worker : workers) {
-                LockSupport.unpark(worker);
-            }
-        }
+        tasks.push(task);
+        wakeWorkers();
     }
 
+    /** Извлекает задачи до остановки пула; если стек пуст, ожидает пробуждения. */
     private void work() {
         while (!stopped) {
             Runnable task = tasks.pop();
             if (task == null) {
-                // NOTICE: park может вернуться без задачи. Условие всегда перепроверяется в цикле;
-                // unpark до park сохраняет один permit и предотвращает потерянное пробуждение.
-                LockSupport.park(this);
-                // Прерывание задачи не должно превратить последующий park в busy-loop.
-                Thread.interrupted();
+                awaitTask();
             } else if (!stopped) {
-                try {
-                    // NOTICE: RuntimeException задачи не убивает worker. Error намеренно не перехватываем.
-                    task.run();
-                } catch (RuntimeException error) {
-                    try {
-                        onFailure.accept(error);
-                    } catch (RuntimeException reportingError) {
-                        System.err.println("Ошибка обработчика задачи: " + reportingError);
-                    }
-                } finally {
-                    Thread.interrupted();
-                }
+                execute(task);
             }
         }
     }
 
-    /** Немедленная учебная остановка: ожидающие задачи отбрасываются, работники прерываются. */
+    /** Приостанавливает работника; после возврата цикл снова проверит стек и признак остановки. */
+    private void awaitTask() {
+        // NOTICE: unpark до park сохраняет одно разрешение на продолжение.
+        // Даже после неожиданного возврата из park цикл заново проверяет наличие задачи.
+        LockSupport.park(this);
+        Thread.interrupted();
+    }
+
+    /** Выполняет одну задачу и изолирует её ошибку и флаг прерывания от следующей задачи. */
+    private void execute(Runnable task) {
+        try {
+            task.run();
+        } catch (RuntimeException error) {
+            reportFailure(error);
+        } finally {
+            // NOTICE: отмена относится к текущей задаче. Оставленный флаг заставил бы
+            // следующий park немедленно возвращаться и загрузил бы процессор пустым циклом.
+            Thread.interrupted();
+        }
+    }
+
+    private void reportFailure(RuntimeException error) {
+        try {
+            onFailure.accept(error);
+        } catch (RuntimeException reportingError) {
+            System.err.println("Ошибка обработчика задачи: " + reportingError);
+        }
+    }
+
+    private void wakeWorkers() {
+        for (Thread worker : workers) {
+            LockSupport.unpark(worker);
+        }
+    }
+
+    /** Отбрасывает ожидающие задачи и запрашивает прерывание всех выполняющихся задач. */
     public void shutdown() {
-        synchronized (lifecycle) {
-            stopped = true;
-            tasks.clear();
-            for (Thread worker : workers) {
-                worker.interrupt();
-                LockSupport.unpark(worker);
-            }
+        tasks.close();
+        stopped = true;
+        for (Thread worker : workers) {
+            worker.interrupt();
+            LockSupport.unpark(worker);
         }
     }
 
+    /** Дожидается всех работников; вызывающий поток не должен сам быть работником этого пула. */
     public void awaitTermination() throws InterruptedException {
         for (Thread worker : workers) {
             if (worker == Thread.currentThread()) {
@@ -92,9 +108,22 @@ public final class TreiberThreadPool implements AutoCloseable {
         }
     }
 
+    /** Останавливает пул и завершает ожидание даже при прерывании, затем восстанавливает флаг. */
     @Override
     public void close() throws InterruptedException {
         shutdown();
-        awaitTermination();
+        boolean interrupted = Thread.interrupted();
+        while (true) {
+            try {
+                awaitTermination();
+                break;
+            } catch (InterruptedException error) {
+                interrupted = true;
+            }
+        }
+        if (interrupted) {
+            Thread.currentThread().interrupt();
+            throw new InterruptedException("Ожидание остановки пула было прервано");
+        }
     }
 }

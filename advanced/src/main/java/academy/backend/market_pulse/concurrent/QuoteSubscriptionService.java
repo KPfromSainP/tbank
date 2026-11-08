@@ -1,203 +1,192 @@
 package academy.backend.market_pulse.concurrent;
 
-import java.math.BigDecimal;
+import academy.backend.market_pulse.client.TInvestApiClient;
+import academy.backend.market_pulse.dto.SubscriptionRequest;
+import academy.backend.market_pulse.dto.SubscriptionSessionOptions;
+import academy.backend.market_pulse.dto.SubscriptionTicker;
+import academy.backend.market_pulse.model.Quote;
 import java.time.Duration;
-import java.util.ArrayList;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Locale;
-import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.locks.LockSupport;
 import java.util.function.Consumer;
 
-/** Диспетчер считает сроки, пул занимается только HTTP. Все поля подписок защищены gate. */
+/**
+ * Управляет временными подписками: диспетчер следит за сроками, работники загружают котировки.
+ * Параметры проверяются при создании объектов запросов; каждая подписка защищает своё состояние.
+ */
 public final class QuoteSubscriptionService implements AutoCloseable {
-    @FunctionalInterface
-    public interface PriceLoader {
-        BigDecimal load(String ticker) throws Exception;
-    }
-
-    private static final long MAX_NANOS = Duration.ofDays(7).toNanos();
-    // NOTICE: gate защищает весь жизненный цикл подписки, включая runner и inFlight.
-    // synchronized/wait/notify здесь — готовая инфраструктура; подробно разбираем на следующем занятии.
-    private final Object gate = new Object();
-    private final Map<String, Subscription> subscriptions = new LinkedHashMap<>();
+    /** Верхняя граница ожидания диспетчера, если ближайшего запроса пока нет. */
+    private static final long MAX_WAIT_NANOS = Duration.ofSeconds(1).toNanos();
+    /** Реестр тикеров: добавление и удаление не требуют общего монитора сервиса. */
+    private final ConcurrentMap<String, Subscription> subscriptions = new ConcurrentHashMap<>();
+    /** Платформенные работники, выполняющие сетевые запросы вне потока диспетчера. */
     private final TreiberThreadPool pool;
+    /** Единственный поток, который выбирает подписки с наступившим сроком запуска. */
     private final Thread dispatcher;
-    private final PriceLoader loader;
+    /** Общий клиент; его реализации допускают одновременные запросы разных работников. */
+    private final TInvestApiClient client;
+    /** Получатель сообщений; разные тикеры могут вызывать его одновременно. */
     private final Consumer<String> output;
-    private boolean closed;
+    /** Признак завершения, видимый вызывающим потокам и диспетчеру без блокировки. */
+    private volatile boolean closed;
 
-    private static final class Subscription {
-        private final String ticker;
-        private final long interval;
-        private final long expiresAt;
-        private long nextRun;
-        private boolean inFlight;
-        private boolean cancelled;
-        private Thread runner;
-
-        private Subscription(String ticker, long interval, long lifetime) {
-            this.ticker = ticker;
-            this.interval = interval;
-            nextRun = System.nanoTime();
-            expiresAt = nextRun + lifetime;
-        }
-    }
-
-    public QuoteSubscriptionService(int workers, PriceLoader loader, Consumer<String> output) {
-        this.loader = Objects.requireNonNull(loader);
+    /** Создаёт пул и запускает поток диспетчера с уже проверенными параметрами сессии. */
+    public QuoteSubscriptionService(SubscriptionSessionOptions options, TInvestApiClient client,
+                                    Consumer<String> output) {
+        this.client = Objects.requireNonNull(client);
         this.output = Objects.requireNonNull(output);
-        pool = new TreiberThreadPool(workers, error -> output.accept("Ошибка задачи: " + error));
-        dispatcher = Thread.ofPlatform().name("quote-dispatcher").start(this::dispatch);
+        pool = new TreiberThreadPool(options.workers(), error -> output.accept("Ошибка задачи: " + error));
+        dispatcher = Thread.ofPlatform().name("quote-dispatcher").unstarted(this::dispatch);
+        dispatcher.start();
     }
 
-    public void watch(String ticker, Duration interval, Duration lifetime) {
-        long delay = positiveNanos(interval);
-        long ttl = positiveNanos(lifetime);
-        String normalized = Objects.requireNonNull(ticker).trim().toUpperCase(Locale.ROOT);
-        if (!normalized.matches("[A-Z0-9._-]{1,32}")) {
-            throw new IllegalArgumentException("Некорректный тикер");
+    /** Регистрирует подписку, отклоняя повторный тикер и регистрацию после закрытия сервиса. */
+    public void watch(SubscriptionRequest request) {
+        requireOpen();
+        Subscription subscription = new Subscription(request);
+        if (subscriptions.putIfAbsent(request.ticker(), subscription) != null) {
+            throw new IllegalArgumentException("Подписка уже существует: " + request.ticker());
         }
-        synchronized (gate) {
-            if (closed) {
-                throw new IllegalStateException("Сервис закрыт");
-            }
-            if (subscriptions.containsKey(normalized)) {
-                throw new IllegalArgumentException("Подписка уже существует: " + normalized);
-            }
-            subscriptions.put(normalized, new Subscription(normalized, delay, ttl));
-            gate.notifyAll();
+        // NOTICE: close мог начаться между первой проверкой и добавлением в карту.
+        // Повторная проверка убирает такую подписку без общей блокировки всех тикеров.
+        if (closed) {
+            subscription.cancel();
+            subscriptions.remove(request.ticker(), subscription);
+            throw new IllegalStateException("Сервис закрыт");
         }
+        wakeDispatcher();
     }
 
-    /** Отмена одной подписки: queued-задача проверит cancelled, выполняющаяся получит interrupt. */
-    public boolean remove(String ticker) {
-        String normalized = Objects.requireNonNull(ticker).trim().toUpperCase(Locale.ROOT);
-        synchronized (gate) {
-            if (closed) {
-                throw new IllegalStateException("Сервис закрыт");
-            }
-            Subscription subscription = subscriptions.remove(normalized);
-            if (subscription == null) {
-                return false;
-            }
-            subscription.cancelled = true;
-            // Под gate runner не успеет закончить эту задачу и начать другую до interrupt.
-            if (subscription.runner != null) {
-                subscription.runner.interrupt();
-            }
-            gate.notifyAll();
-            return true;
+    /** Удаляет подписку и отменяет только принадлежащий ей запрос. */
+    public boolean remove(SubscriptionTicker ticker) {
+        requireOpen();
+        Subscription subscription = subscriptions.get(ticker.value());
+        if (subscription == null) {
+            return false;
+        }
+        subscription.cancel();
+        boolean removed = subscriptions.remove(ticker.value(), subscription);
+        wakeDispatcher();
+        return removed;
+    }
+
+    private void requireOpen() {
+        if (closed) {
+            throw new IllegalStateException("Сервис закрыт");
         }
     }
 
-    private static long positiveNanos(Duration duration) {
-        Objects.requireNonNull(duration);
-        if (duration.isNegative() || duration.isZero() || duration.compareTo(Duration.ofDays(7)) > 0) {
-            throw new IllegalArgumentException("Интервал и срок: больше 0, не больше 7 дней");
-        }
-        return duration.toNanos();
-    }
-
+    /** Обходит подписки и ожидает ближайшего срока или уведомления об изменении состояния. */
     private void dispatch() {
         try {
-            while (true) {
-                List<Subscription> due = new ArrayList<>();
-                synchronized (gate) {
-                    if (closed) {
-                        return;
-                    }
-                    long now = System.nanoTime();
-                    long waitNanos = MAX_NANOS;
-                    var iterator = subscriptions.values().iterator();
-                    while (iterator.hasNext()) {
-                        Subscription subscription = iterator.next();
-                        if (now - subscription.expiresAt >= 0) {
-                            // Сохраняем выполняющуюся подписку до completion, без повторной регистрации.
-                            if (!subscription.inFlight) {
-                                iterator.remove();
-                            }
-                            continue;
-                        }
-                        if (!subscription.inFlight && now - subscription.nextRun >= 0) {
-                            // NOTICE: отмечаем занятость ДО submit, иначе диспетчер поставит дубликат.
-                            subscription.inFlight = true;
-                            due.add(subscription);
-                        }
-                        long wakeAt = subscription.inFlight ? subscription.expiresAt
-                                : Math.min(subscription.nextRun - now, subscription.expiresAt - now) + now;
-                        waitNanos = Math.min(waitNanos, wakeAt - now);
-                    }
-                    if (due.isEmpty()) {
-                        long millis = Math.max(1, Math.min(1_000, waitNanos / 1_000_000));
-                        gate.wait(millis);
-                        continue; // condition loop: notify не означает, что работа уже появилась
-                    }
-                }
-                for (Subscription subscription : due) {
-                    try {
-                        pool.submit(() -> refresh(subscription));
-                    } catch (IllegalStateException error) {
-                        synchronized (gate) {
-                            if (!closed) {
-                                throw error;
-                            }
-                        }
-                        return;
-                    }
-                }
+            while (!closed && !Thread.currentThread().isInterrupted()) {
+                long delay = dispatchDueRequests();
+                // NOTICE: park может вернуться без уведомления. Каждый новый обход заново
+                // проверяет сроки; unpark до park сохраняет разрешение и не теряет изменение.
+                LockSupport.parkNanos(this, delay);
             }
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
+        } finally {
+            // Прерывание диспетчера означает завершение сервиса, а не продолжение пустого цикла.
+            shutdown();
         }
     }
 
+    /** Удаляет истёкшие подписки, передаёт готовые запросы в пул и находит ближайший срок. */
+    private long dispatchDueRequests() {
+        long now = System.nanoTime();
+        long delay = MAX_WAIT_NANOS;
+        for (Subscription subscription : subscriptions.values()) {
+            if (subscription.isExpiredAndIdle(now)) {
+                subscriptions.remove(subscription.ticker(), subscription);
+            } else {
+                submitIfDue(subscription, now);
+                delay = Math.min(delay, subscription.delayUntilNextCheck(now));
+            }
+        }
+        return delay;
+    }
+
+    /** Передаёт зарезервированный запрос в пул, учитывая возможное одновременное закрытие. */
+    private void submitIfDue(Subscription subscription, long now) {
+        if (!closed && subscription.scheduleIfDue(now)) {
+            try {
+                pool.submit(() -> refresh(subscription));
+            } catch (IllegalStateException error) {
+                subscription.finishRequest();
+                if (!closed) {
+                    throw error;
+                }
+            }
+        }
+    }
+
+    /** Загружает котировку вне блокировки подписки и завершает запрос при любом исходе. */
     private void refresh(Subscription subscription) {
         try {
-            synchronized (gate) {
-                // Срок мог истечь, пока задача лежала в стеке.
-                if (closed || subscription.cancelled || System.nanoTime() - subscription.expiresAt >= 0) {
-                    return;
-                }
-                subscription.runner = Thread.currentThread();
+            if (closed || !subscription.beginRequest()) {
+                return;
             }
-            // NOTICE: HTTP выполняется вне gate: медленный ответ не блокирует watch/remove.
-            // Для отмены через interrupt используем HttpClient.send; URLConnection так не отменяется.
-            BigDecimal price = loader.load(subscription.ticker);
-            emit(subscription, "[" + subscription.ticker + "] " + price);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-        } catch (Exception error) {
-            emit(subscription, "[" + subscription.ticker + "] Ошибка: " + error.getMessage());
+            Quote quote = loadQuote(subscription.ticker());
+            subscription.publish(quote.getPrice().toPlainString(), output);
+        } catch (RuntimeException error) {
+            if (Thread.currentThread().isInterrupted()) {
+                // NOTICE: HttpClientTInvestApiClient восстанавливает флаг и оборачивает
+                // InterruptedException. Отмена завершает подписку и не становится сетевой ошибкой.
+                subscription.cancel();
+                subscriptions.remove(subscription.ticker(), subscription);
+            } else {
+                subscription.publish("Ошибка: " + error.getMessage(), output);
+            }
         } finally {
-            synchronized (gate) {
-                subscription.runner = null;
-                subscription.inFlight = false;
-                subscription.nextRun = System.nanoTime() + subscription.interval; // fixed delay
-                gate.notifyAll();
-            }
+            subscription.finishRequest();
+            wakeDispatcher();
         }
     }
 
-    private void emit(Subscription subscription, String line) {
-        synchronized (gate) {
-            if (!closed && !subscription.cancelled && !Thread.currentThread().isInterrupted()) {
-                // Короткий вывод согласован с remove: после возврата remove новых сообщений нет.
-                output.accept(line);
-            }
-        }
+    /** Загружает каталог через общий клиент и находит котировку нужного тикера. */
+    private Quote loadQuote(String ticker) {
+        // NOTICE: сетевой запрос не удерживает монитор подписки, поэтому remove может
+        // сразу запросить прерывание HttpClient.send, даже если сервер ещё не ответил.
+        return client.fetchQuotes().stream()
+                .filter(quote -> quote.getInstrument().getTicker().equalsIgnoreCase(ticker))
+                .findFirst()
+                .orElseThrow(() -> new IllegalArgumentException("Тикер не найден: " + ticker));
     }
 
-    @Override
-    public void close() throws InterruptedException {
-        synchronized (gate) {
-            closed = true;
-            gate.notifyAll();
-        }
+    private void wakeDispatcher() {
+        LockSupport.unpark(dispatcher);
+    }
+
+    /** Запрещает новые подписки и запрашивает отмену диспетчера и всех запросов. */
+    private void shutdown() {
+        closed = true;
+        subscriptions.values().forEach(Subscription::cancel);
+        subscriptions.clear();
         dispatcher.interrupt();
         pool.shutdown();
-        dispatcher.join();
-        pool.awaitTermination();
+    }
+
+    /** Останавливает сервис, дожидается потоков и восстанавливает прерывание вызывающего потока. */
+    @Override
+    public void close() throws InterruptedException {
+        shutdown();
+        boolean interrupted = Thread.interrupted();
+        while (true) {
+            try {
+                dispatcher.join();
+                pool.awaitTermination();
+                break;
+            } catch (InterruptedException error) {
+                // NOTICE: нельзя бросить ожидание на полпути и оставить работающие потоки.
+                // Сначала завершаем освобождение ресурсов, затем возвращаем сигнал вызывающему коду.
+                interrupted = true;
+            }
+        }
+        if (interrupted) {
+            Thread.currentThread().interrupt();
+            throw new InterruptedException("Ожидание остановки подписок было прервано");
+        }
     }
 }

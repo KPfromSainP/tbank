@@ -2,21 +2,24 @@ package academy.backend.market_pulse.cli;
 
 import academy.backend.market_pulse.client.TInvestApiClient;
 import academy.backend.market_pulse.concurrent.QuoteSubscriptionService;
+import academy.backend.market_pulse.dto.SubscriptionRequest;
+import academy.backend.market_pulse.dto.SubscriptionSessionOptions;
+import academy.backend.market_pulse.dto.SubscriptionTicker;
 import java.io.BufferedReader;
+import java.io.IOException;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
-import java.time.Duration;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
+import java.util.concurrent.Callable;
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Option;
 
-/** Интерактивный пример семинара 10: watch TICKER INTERVAL LIFETIME / remove TICKER / exit. */
+/** Интерактивная сессия: проверяет введённые параметры и передаёт готовые запросы сервису подписок. */
 @Command(name = "subscriptions", description = "Временные подписки на котировки через учебный пул")
-public final class SubscriptionsCommand implements java.util.concurrent.Callable<Integer> {
-    private static final Pattern DURATION = Pattern.compile("([1-9][0-9]*)(ms|s|m|h)");
+public final class SubscriptionsCommand implements Callable<Integer> {
+    /** Клиент приложения; команда передаёт его сервису без дополнительной функции-загрузчика. */
     private final TInvestApiClient client;
 
+    /** Введённое число работников; перед созданием сервиса проверяется в SubscriptionSessionOptions. */
     @Option(names = "--workers", defaultValue = "3", description = "Количество платформенных работников")
     private int workers;
 
@@ -24,65 +27,77 @@ public final class SubscriptionsCommand implements java.util.concurrent.Callable
         this.client = client;
     }
 
+    /** Создаёт сессию и освобождает её потоки при выходе, ошибке чтения или прерывании. */
     @Override
-    public Integer call() throws Exception {
-        // NOTICE: запускать с MARKET_PULSE_CLIENT=HTTP_CLIENT для демонстрации отмены HTTP.
-        // Учебный endpoint отдаёт каталог целиком. Каждый refresh делает отдельный HTTP-запрос
-        // и выбирает нужный тикер; ни общего кеша, ни мутаций Instrument здесь нет.
-        try (var service = new QuoteSubscriptionService(workers, ticker -> client.fetchQuotes().stream()
-                .filter(quote -> quote.getInstrument().getTicker().equalsIgnoreCase(ticker))
-                .findFirst().orElseThrow(() -> new IllegalArgumentException("Тикер не найден: " + ticker))
-                .getPrice(), System.out::println)) {
-            System.out.println("watch SBER 3s 30s — интервал после ответа и общий срок; remove SBER — отменить подписку; exit — остановить всё");
-            var input = new BufferedReader(new InputStreamReader(System.in, StandardCharsets.UTF_8));
-            String line;
-            while ((line = input.readLine()) != null) {
-                String command = line.trim();
-                if (command.equalsIgnoreCase("exit")) {
-                    break;
-                }
-                if (command.isEmpty()) {
-                    continue;
-                }
-                String[] parts = command.split("\\s+");
-                if (parts.length == 2 && parts[0].equalsIgnoreCase("remove")) {
-                    boolean removed = service.remove(parts[1]);
-                    System.out.println(removed ? "Подписка удалена: " + parts[1]
-                            : "Подписка не найдена: " + parts[1]);
-                    continue;
-                }
-                if (parts.length != 4 || !parts[0].equalsIgnoreCase("watch")) {
-                    System.out.println("Формат: watch TICKER 3s 30s; единицы ms/s/m/h; remove TICKER; exit");
-                    continue;
-                }
-                try {
-                    service.watch(parts[1], parseDuration(parts[2]), parseDuration(parts[3]));
-                    System.out.println("Подписка принята: " + parts[1]);
-                } catch (IllegalArgumentException error) {
-                    System.out.println("Ошибка: " + error.getMessage());
-                }
+    public Integer call() {
+        try {
+            SubscriptionSessionOptions options = new SubscriptionSessionOptions(workers);
+            try (var service = new QuoteSubscriptionService(options, client, System.out::println)) {
+                readCommands(service);
             }
+            System.out.println("Подписки и пул остановлены");
+            return 0;
+        } catch (IllegalArgumentException error) {
+            System.err.println("Ошибка параметров: " + error.getMessage());
+            return 2;
+        } catch (InterruptedException error) {
+            // NOTICE: прерывание — сигнал завершить команду. Сохраняем его для вызывающего кода,
+            // а сервис к этому моменту уже дождался остановки своих потоков.
+            Thread.currentThread().interrupt();
+            System.err.println("Ожидание остановки подписок прервано");
+            return 130;
+        } catch (IOException error) {
+            System.err.println("Не удалось прочитать команду: " + error.getMessage());
+            return 1;
         }
-        System.out.println("Подписки и пул остановлены");
-        return 0;
     }
 
-    static Duration parseDuration(String value) {
-        Matcher matcher = DURATION.matcher(value);
-        if (!matcher.matches()) {
-            throw new IllegalArgumentException("Длительность: положительное число и ms/s/m/h");
+    /** Читает строки до exit или конца ввода, сохраняя общий System.in открытым. */
+    private void readCommands(QuoteSubscriptionService service) throws IOException {
+        System.out.println("watch SBER 3s 30s — интервал после ответа и общий срок; "
+                + "remove SBER — отменить подписку; exit — остановить всё");
+        var input = new BufferedReader(new InputStreamReader(System.in, StandardCharsets.UTF_8));
+        String line;
+        while ((line = input.readLine()) != null) {
+            String command = line.trim();
+            if (command.equalsIgnoreCase("exit")) {
+                return;
+            }
+            if (!command.isEmpty()) {
+                executeCommand(command, service);
+            }
         }
+    }
+
+    /** Проверяет формат строки и сообщает об ошибке, не завершая интерактивную сессию. */
+    private void executeCommand(String command, QuoteSubscriptionService service) {
+        String[] parts = command.split("\\s+");
         try {
-            long count = Long.parseLong(matcher.group(1));
-            return switch (matcher.group(2)) {
-                case "ms" -> Duration.ofMillis(count);
-                case "s" -> Duration.ofSeconds(count);
-                case "m" -> Duration.ofMinutes(count);
-                case "h" -> Duration.ofHours(count);
-                default -> throw new IllegalArgumentException("Неизвестная единица времени");
-            };
-        } catch (ArithmeticException | NumberFormatException error) {
-            throw new IllegalArgumentException("Слишком большая длительность", error);
+            if (parts.length == 4 && parts[0].equalsIgnoreCase("watch")) {
+                watch(parts, service);
+            } else if (parts.length == 2 && parts[0].equalsIgnoreCase("remove")) {
+                remove(parts[1], service);
+            } else {
+                System.out.println("Формат: watch TICKER 3s 30s; единицы ms/s/m/h; remove TICKER; exit");
+            }
+        } catch (IllegalArgumentException error) {
+            System.out.println("Ошибка: " + error.getMessage());
         }
+    }
+
+    /** Создаёт проверенный объект параметров подписки и регистрирует его в сервисе. */
+    private void watch(String[] parts, QuoteSubscriptionService service) {
+        // NOTICE: сервис получает уже нормализованный тикер и проверенные длительности.
+        SubscriptionRequest request = SubscriptionRequest.parse(parts[1], parts[2], parts[3]);
+        service.watch(request);
+        System.out.println("Подписка принята: " + request.ticker());
+    }
+
+    /** Проверяет тикер и сообщает, существовала ли отменяемая подписка. */
+    private void remove(String value, QuoteSubscriptionService service) {
+        SubscriptionTicker ticker = new SubscriptionTicker(value);
+        boolean removed = service.remove(ticker);
+        System.out.println(removed ? "Подписка удалена: " + ticker.value()
+                : "Подписка не найдена: " + ticker.value());
     }
 }

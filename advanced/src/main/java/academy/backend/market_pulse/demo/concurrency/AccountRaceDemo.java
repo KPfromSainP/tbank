@@ -4,55 +4,46 @@ import java.util.concurrent.CountDownLatch;
 
 /** Два списания по 80 при балансе 100: защищать нужно проверку вместе с изменением. */
 public final class AccountRaceDemo {
-    private static final class Account {
-        private int balance = 100;
-        private int successfulWithdrawals;
-
-        private synchronized boolean withdraw(int amount) {
-            if (balance < amount) {
-                return false;
-            }
-            balance -= amount;
-            successfulWithdrawals++;
-            return true;
-        }
-    }
-
+    /** Сравнивает ошибочное списание с целостной операцией и проверяет итоговые балансы. */
     public static void main(String[] args) throws InterruptedException {
-        Account unsafe = new Account();
-        CountDownLatch bothChecked = new CountDownLatch(2);
-        Runnable unsafeWithdrawal = () -> {
-            // Барьер намеренно воспроизводит ситуацию со старой схемы: обе проверки успешны.
-            boolean enough = unsafe.balance >= 80;
-            bothChecked.countDown();
-            try {
-                bothChecked.await();
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                return;
-            }
-            if (enough) {
-                synchronized (unsafe) {
-                    // Одного защищённого изменения недостаточно: проверка уже устарела.
-                    unsafe.balance -= 80;
-                    unsafe.successfulWithdrawals++;
-                }
-            }
-        };
-        runPair(unsafeWithdrawal);
-        System.out.printf("Проверка вне монитора: списаний=%d, баланс=%d%n",
-                unsafe.successfulWithdrawals, unsafe.balance);
-
-        Account safe = new Account();
+        WithdrawalAccount unsafe = demonstrateStaleCheck();
+        WithdrawalAccount safe = new WithdrawalAccount();
         runPair(() -> safe.withdraw(80));
-        System.out.printf("Проверка и изменение вместе: списаний=%d, баланс=%d%n",
-                safe.successfulWithdrawals, safe.balance);
-        if (unsafe.successfulWithdrawals != 2 || unsafe.balance != -60
-                || safe.successfulWithdrawals != 1 || safe.balance != 20) {
+        printResult("Проверка вне монитора", unsafe);
+        printResult("Проверка и изменение вместе", safe);
+        if (unsafe.successfulWithdrawals() != 2 || unsafe.balance() != -60
+                || safe.successfulWithdrawals() != 1 || safe.balance() != 20) {
             throw new AssertionError("Неожиданный результат демонстрации");
         }
     }
 
+    /** Заставляет оба потока проверить баланс до первого изменения, воспроизводя гонку. */
+    private static WithdrawalAccount demonstrateStaleCheck() throws InterruptedException {
+        WithdrawalAccount account = new WithdrawalAccount();
+        CountDownLatch bothChecked = new CountDownLatch(2);
+        runPair(() -> {
+            boolean enough = account.hasEnough(80);
+            bothChecked.countDown();
+            try {
+                bothChecked.await();
+            } catch (InterruptedException error) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+            // NOTICE: монитор вокруг списания уже не исправляет устаревший результат проверки.
+            if (enough) {
+                account.withdrawWithoutCheck(80);
+            }
+        });
+        return account;
+    }
+
+    private static void printResult(String label, WithdrawalAccount account) {
+        System.out.printf("%s: списаний=%d, баланс=%d%n", label,
+                account.successfulWithdrawals(), account.balance());
+    }
+
+    /** Запускает два конкурентных действия и не оставляет их работать при прерывании main. */
     private static void runPair(Runnable action) throws InterruptedException {
         Thread first = Thread.ofPlatform().name("withdrawal-1").unstarted(action);
         Thread second = Thread.ofPlatform().name("withdrawal-2").unstarted(action);

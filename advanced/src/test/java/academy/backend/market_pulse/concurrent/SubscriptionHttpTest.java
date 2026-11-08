@@ -3,12 +3,12 @@ package academy.backend.market_pulse.concurrent;
 import static org.junit.jupiter.api.Assertions.*;
 
 import com.sun.net.httpserver.HttpServer;
-import java.math.BigDecimal;
+import academy.backend.market_pulse.client.impl.HttpClientTInvestApiClient;
+import academy.backend.market_pulse.config.TInvestApiProperties;
+import academy.backend.market_pulse.dto.SubscriptionRequest;
+import academy.backend.market_pulse.dto.SubscriptionSessionOptions;
+import academy.backend.market_pulse.dto.SubscriptionTicker;
 import java.net.InetSocketAddress;
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
@@ -17,6 +17,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.junit.jupiter.api.Timeout;
 
+/** Проверяет отмену настоящего HTTP-клиента сервиса до получения тела ответа. */
 @Timeout(10)
 class SubscriptionHttpTest {
     @ParameterizedTest
@@ -25,9 +26,9 @@ class SubscriptionHttpTest {
         HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         CountDownLatch request = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);
-        try (var handlers = Executors.newCachedThreadPool(); var client = HttpClient.newHttpClient()) {
+        try (var handlers = Executors.newCachedThreadPool()) {
             server.setExecutor(handlers);
-            server.createContext("/quote", exchange -> {
+            server.createContext("/v1/instruments", exchange -> {
                 try (exchange) {
                     exchange.sendResponseHeaders(200, 2);
                     exchange.getResponseBody().flush();
@@ -41,18 +42,17 @@ class SubscriptionHttpTest {
                 }
             });
             server.start();
-            URI uri = URI.create("http://127.0.0.1:" + server.getAddress().getPort() + "/quote");
-            QuoteSubscriptionService service = new QuoteSubscriptionService(1, ticker -> {
-                String body = client.send(HttpRequest.newBuilder(uri).build(),
-                        HttpResponse.BodyHandlers.ofString()).body();
-                return new BigDecimal(body);
-            }, line -> {});
+            var client = new HttpClientTInvestApiClient(new TInvestApiProperties("127.0.0.1",
+                    server.getAddress().getPort(), Duration.ofSeconds(2), Duration.ofSeconds(5)));
+            var output = new java.util.concurrent.CopyOnWriteArrayList<String>();
+            QuoteSubscriptionService service = new QuoteSubscriptionService(
+                    new SubscriptionSessionOptions(1), client, output::add);
             try {
-                service.watch("SBER", Duration.ofSeconds(1), Duration.ofMinutes(1));
+                service.watch(new SubscriptionRequest("SBER", Duration.ofSeconds(1), Duration.ofMinutes(1)));
                 assertTrue(request.await(2, TimeUnit.SECONDS));
                 assertTimeoutPreemptively(Duration.ofSeconds(2), () -> {
                     if (remove) {
-                        assertTrue(service.remove("SBER"));
+                        assertTrue(service.remove(new SubscriptionTicker("SBER")));
                     } else {
                         service.close();
                     }
@@ -62,6 +62,7 @@ class SubscriptionHttpTest {
                 server.stop(0);
                 service.close();
             }
+            assertTrue(output.isEmpty(), "Отмена не должна печатать сообщение о сетевой ошибке");
         } finally {
             server.stop(0);
         }

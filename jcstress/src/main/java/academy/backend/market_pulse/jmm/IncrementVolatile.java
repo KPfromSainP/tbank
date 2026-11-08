@@ -19,6 +19,7 @@ import org.openjdk.jcstress.infra.results.I_Result;
 @Outcome(expect = Expect.FORBIDDEN, desc = "Прочие исходы")
 @State
 public class IncrementVolatile {
+    /** Видимый обоим потокам счётчик; volatile не делает составной ++ атомарным. */
     private volatile int counter;
 
     @Actor
@@ -31,6 +32,7 @@ public class IncrementVolatile {
         counter++;
     }
 
+    /** Собирает итог после завершения обоих конкурентных участников. */
     @Arbiter
     public void readResult(I_Result result) {
         result.r1 = counter;

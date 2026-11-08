@@ -11,7 +11,7 @@ import org.openjdk.jcstress.infra.results.I_Result;
 /**
  * Два инкремента обычного счётчика могут потерять одно обновление.
  *
- * <p>Arbiter читает счётчик после завершения обоих actor.
+ * <p>Arbiter читает счётчик после завершения обоих конкурентных участников.
  */
 @JCStressTest
 @Outcome(id = "2", expect = Expect.ACCEPTABLE, desc = "Оба инкремента сохранены: итоговое значение 2")
@@ -19,6 +19,7 @@ import org.openjdk.jcstress.infra.results.I_Result;
 @Outcome(expect = Expect.FORBIDDEN, desc = "Прочие исходы")
 @State
 public class IncrementPlain {
+    /** Общий счётчик; чтение, увеличение и запись намеренно не объединены в одну операцию. */
     private int counter;
 
     @Actor
@@ -31,6 +32,7 @@ public class IncrementPlain {
         counter++;
     }
 
+    /** Собирает итог после завершения обоих конкурентных участников. */
     @Arbiter
     public void readResult(I_Result result) {
         result.r1 = counter;

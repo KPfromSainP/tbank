@@ -19,25 +19,19 @@ import org.openjdk.jcstress.infra.results.I_Result;
 @Outcome(expect = Expect.FORBIDDEN, desc = "Прочие исходы")
 @State
 public class FinalPublication {
-    private Holder holder;
+    /** Обычная ссылка: публикация самой ссылки не гарантирована, в отличие от final-поля объекта. */
+    private FinalValueHolder holder;
 
     @Actor
     public void writer() {
-        holder = new Holder();
+        holder = new FinalValueHolder();
     }
 
     @Actor
     public void reader(I_Result result) {
         // Одно чтение ссылки: повторное plain-чтение — уже другой эксперимент.
-        Holder observed = holder;
+        FinalValueHolder observed = holder;
         result.r1 = observed == null ? -1 : observed.value;
     }
 
-    private static final class Holder {
-        private final int value;
-
-        private Holder() {
-            value = 42;
-        }
-    }
 }

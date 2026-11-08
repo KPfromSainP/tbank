@@ -1,39 +1,11 @@
 package academy.backend.market_pulse.demo.concurrency;
 
-/** Публикация результата через volatile-флаг. */
+/** Публикация результата: обычные данные становятся видимыми после чтения volatile-флага. */
 public final class PublicationDemo {
-    private static final class ResultProvider {
-        private int result;
-        // NOTICE: запись result предшествует volatile-write, чтение result следует за volatile-read.
-        // Эта цепочка happens-before публикует обычное поле result; sleep такой гарантии не даёт.
-        private volatile boolean resultsReady;
-
-        private void complete(int value) {
-            result = value;
-            resultsReady = true;
-        }
-
-        private int await() throws InterruptedException {
-            while (!resultsReady) {
-                if (Thread.currentThread().isInterrupted()) {
-                    throw new InterruptedException("Ожидание результата отменено");
-                }
-                Thread.onSpinWait();
-            }
-            return result;
-        }
-    }
-
+    /** Запускает читателя и публикует значение из основного потока. */
     public static void main(String[] args) throws InterruptedException {
         ResultProvider provider = new ResultProvider();
-        // Spin оставлен для сопоставления со слайдами; в прикладном ожидании используем блокировку.
-        Thread reader = Thread.ofPlatform().name("result-reader").unstarted(() -> {
-            try {
-                System.out.println("Опубликовано: " + provider.await());
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-            }
-        });
+        Thread reader = Thread.ofPlatform().name("result-reader").unstarted(() -> printResult(provider));
         reader.start();
         try {
             provider.complete(42);
@@ -42,6 +14,16 @@ public final class PublicationDemo {
             reader.interrupt();
             reader.join();
         }
-        // Ошибочный вариант с обычным флагом запускаем только в jcstress (PublicationPlain).
+    }
+
+    /** Читает опубликованное значение либо завершает ожидание с сохранённым флагом прерывания. */
+    private static void printResult(ResultProvider provider) {
+        try {
+            // NOTICE: активное ожидание расходует процессор. onSpinWait лишь даёт подсказку
+            // процессору, а видимость данных обеспечивает volatile внутри ResultProvider.
+            System.out.println("Опубликовано: " + provider.await());
+        } catch (InterruptedException error) {
+            Thread.currentThread().interrupt();
+        }
     }
 }

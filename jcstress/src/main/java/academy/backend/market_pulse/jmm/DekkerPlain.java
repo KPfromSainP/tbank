@@ -8,20 +8,22 @@ import org.openjdk.jcstress.annotations.State;
 import org.openjdk.jcstress.infra.results.II_Result;
 
 /**
- * Две обычные переменные: оба actor могут прочитать исходные нули.
+ * Две обычные переменные: оба конкурентных участника могут прочитать исходные нули.
  *
- * <p>Сравнить с DekkerVolatile: тело actor одинаковое, меняется только доступ к полям.
+ * <p>Сравнить с DekkerVolatile: тела конкурентных методов одинаковые, меняется только доступ к полям.
  */
 @JCStressTest
 @Outcome(
         id = {"1, 1", "0, 1", "1, 0"},
         expect = Expect.ACCEPTABLE,
-        desc = "Хотя бы одно чтение увидело запись другого actor")
+        desc = "Хотя бы одно чтение увидело запись другого участника")
 @Outcome(id = "0, 0", expect = Expect.ACCEPTABLE_INTERESTING, desc = "Оба чтения вернули исходное значение 0")
 @Outcome(expect = Expect.FORBIDDEN, desc = "Прочие исходы")
 @State
 public class DekkerPlain {
+    /** Переменная, в которую записывает первый участник и которую читает второй. */
     private int x;
+    /** Переменная, в которую записывает второй участник и которую читает первый. */
     private int y;
 
     @Actor

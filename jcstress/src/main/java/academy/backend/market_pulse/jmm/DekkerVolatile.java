@@ -16,12 +16,14 @@ import org.openjdk.jcstress.infra.results.II_Result;
 @Outcome(
         id = {"1, 1", "0, 1", "1, 0"},
         expect = Expect.ACCEPTABLE,
-        desc = "Хотя бы одно чтение увидело запись другого actor")
+        desc = "Хотя бы одно чтение увидело запись другого участника")
 @Outcome(id = "0, 0", expect = Expect.FORBIDDEN, desc = "Оба чтения вернули исходное значение 0")
 @Outcome(expect = Expect.FORBIDDEN, desc = "Прочие исходы")
 @State
 public class DekkerVolatile {
+    /** Первая переменная; volatile упорядочивает доступы конкурентных участников. */
     private volatile int x;
+    /** Вторая переменная с теми же гарантиями видимости и порядка. */
     private volatile int y;
 
     @Actor
