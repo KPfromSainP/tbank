@@ -1,0 +1,6 @@
+<FindBugsFilter>
+    <!-- Сгенерированный JMH-код и бенчмарки анализировать не нужно -->
+    <Match>
+        <Package name="~.*\.benchmark(\..*)?"/>
+    </Match>
+</FindBugsFilter>
