@@ -155,7 +155,7 @@ GAIN_LOSS_SPLIT: {false=2, true=4}
 ```
 
 Новая статистика добавляется без изменения `StatsCommand`: класс в `stat.impl` + значение в `StatCode` + строка в
-`Main.stats()`.
+`AppConfig.stats()`.
 
 ## compare
 
@@ -232,7 +232,7 @@ update
 Сбой на стороне мока включает `MARKET_PULSE_MOCK_SCENARIO=error|timeout`.
 
 ```bash
-MARKET_PULSE_CLIENT=URL_CONNECTION update
+MARKET_PULSE_CLIENT=URL_CONNECTION java -cp <classpath> academy.backend.market_pulse.Main update
 ```
 
 ```
@@ -240,3 +240,86 @@ SBER: 250.00 RUB ▲ 1.20%
 GAZP: 120.50 RUB ▼ 0.80%
 Получено котировок: 2
 ```
+
+
+## subscriptions
+
+Интерактивные временные подписки на котировки. Заранее поднять моковый сервер командой
+из раздела `update`. Из корня репозитория:
+
+```bash
+MARKET_PULSE_CLIENT=HTTP_CLIENT java -cp <classpath> academy.backend.market_pulse.Main subscriptions --workers 3
+```
+
+`<classpath>` — classpath приложения с зависимостями, как при запуске остальных CLI-команд.
+В IDEA: main-класс `academy.backend.market_pulse.Main`, аргументы `subscriptions --workers 3`,
+переменная окружения `MARKET_PULSE_CLIENT=HTTP_CLIENT`.
+`--workers` — положительное число платформенных работников, по умолчанию `3`.
+
+После запуска вводить в консоли процесса:
+
+```text
+watch SBER 3s 30s
+watch GAZP 1s 10s
+remove SBER
+exit
+```
+
+| Команда внутри `subscriptions` | Действие |
+|-------------------------------|----------|
+| `watch TICKER INTERVAL LIFETIME` | Создать подписку: первый запрос сразу, затем интервал после завершения предыдущего запроса |
+| `remove TICKER` | Удалить подписку и прервать выполняющийся запрос |
+| `exit` или EOF | Остановить диспетчер и пул, прервать активные задачи и дождаться завершения потоков |
+
+Длительности: положительное целое число с единицей `ms`, `s`, `m` или `h`; интервал и срок
+не больше 7 дней. Тикер нормализуется к верхнему регистру, повторная активная подписка — ошибка.
+По истечении срока новые запросы не запускаются; уже выполняющийся запрос может завершиться.
+Каждый запрос загружает каталог целиком и выбирает котировку по тикеру, результат печатается
+как `[SBER] 250.00`. Пул использует LIFO, поэтому порядок обработки разных подписок не гарантирован.
+
+Для демонстрации отмены запроса нужен `HTTP_CLIENT`: его `send` реагирует на interrupt.
+`HttpURLConnection` не гарантирует такую отмену. Сценарий задержки мока:
+
+```bash
+MARKET_PULSE_CLIENT=HTTP_CLIENT MARKET_PULSE_MOCK_SCENARIO=timeout java -cp <classpath> academy.backend.market_pulse.Main subscriptions
+```
+
+В этом режиме `watch` и `remove` — команды интерактивной сессии подписок.
+Верхнеуровневые CLI-команды `watch` и `remove` работают с watchlist и репозиторием.
+
+## Демонстрации потоков
+
+Запускать main-классы из пакета `academy.backend.market_pulse.demo.concurrency` в IDEA
+или из корня репозитория после `mvn -pl advanced -am compile`:
+
+```bash
+java -cp advanced/target/classes academy.backend.market_pulse.demo.concurrency.ThreadApiDemo
+```
+
+| Класс | Что показывает |
+|-------|----------------|
+| `ThreadApiDemo` | `run`/`start`, builder платформенного потока, `join`, daemon и приоритет |
+| `ThreadStatesDemo` | Состояния потоков; до Enter можно выполнить `jcmd <pid> Thread.print` |
+| `WaitingDemo` | `sleep` удерживает монитор, `wait` освобождает его |
+| `ParkingDemo` | `park`/`unpark`, один permit и повторная проверка условия |
+| `InterruptDemo` | Прерывание `sleep`, `park` и ожидания монитора |
+| `BlockingIoDemo` | Блокирующее чтение сокета; Enter закрывает ресурс и завершает ожидание |
+| `HttpInterruptDemo` | Отмена `HttpClient.send` и поведение `HttpURLConnection`; аргументы `both` (по умолчанию), `http-client`, `url-connection` |
+| `UncaughtExceptionDemo` | Обработка необработанного исключения фонового потока |
+| `AccountRaceDemo` | Проверка баланса вместе с изменением и отдельно от него |
+| `PublicationDemo` | Публикация обычного поля через volatile-флаг |
+
+## jcstress
+
+Конкурентные эксперименты запускаются отдельно от CLI и JUnit. Из корня репозитория:
+
+```bash
+mvn -pl jcstress -am package -DskipTests
+cd jcstress
+java -jar target/jcstress.jar -l -t 'academy.backend.market_pulse.jmm.*'
+java -jar target/jcstress.jar -t 'academy.backend.market_pulse.jmm.PublicationVolatile' -m quick -f 1 -iters 2 -time 100 -c 2 -hs 128 -af NONE -jvmArgs '-Xms128m -Xmx128m' -r results
+```
+
+Для всех опытов заменить фильтр `-t` на `'academy.backend.market_pulse.jmm.*'`.
+Отчёт — `jcstress/results/index.html`. Пример опыта, интерпретация отчёта и результаты:
+[Эксперименты JMM](materials/seminar10/Эксперименты%20JMM.md).
