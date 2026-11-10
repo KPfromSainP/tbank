@@ -1,10 +1,11 @@
 package academy.backend.market_pulse.cli;
 
 import academy.backend.market_pulse.client.TInvestApiClient;
-import academy.backend.market_pulse.client.impl.HttpClientTInvestApiClient;
+import academy.backend.market_pulse.client.InterruptibleTInvestApiClient;
 import academy.backend.market_pulse.concurrent.QuoteSubscriptionService;
 import academy.backend.market_pulse.dto.subscription.SubscriptionConfig;
 import academy.backend.market_pulse.dto.subscription.SubscriptionRequest;
+import academy.backend.market_pulse.dto.subscription.SubscriptionResult;
 import academy.backend.market_pulse.dto.subscription.SubscriptionTicker;
 
 import java.io.BufferedReader;
@@ -44,12 +45,14 @@ public final class SubscriptionsCommand implements Callable<Integer> {
     public Integer call() {
         try {
             SubscriptionConfig config = new SubscriptionConfig(workers);
-            // NOTICE: remove и exit опираются на прерываемый HttpClient.send.
-            // Остальные учебные клиенты не гарантируют освобождение worker по interrupt.
-            if (!(client instanceof HttpClientTInvestApiClient)) {
-                throw new IllegalArgumentException("Для subscriptions нужен MARKET_PULSE_CLIENT=HTTP_CLIENT");
+            // NOTICE: нужен контракт отмены, а не конкретная реализация HTTP-клиента.
+            if (!(client instanceof InterruptibleTInvestApiClient interruptibleClient)) {
+                throw new IllegalArgumentException("Для subscriptions нужен прерываемый клиент; "
+                        + "выберите MARKET_PULSE_CLIENT=HTTP_CLIENT");
             }
-            try (var service = new QuoteSubscriptionService(config, client, System.out::println)) {
+            try (var service = new QuoteSubscriptionService(config, interruptibleClient,
+                    result -> System.out.println(formatResult(result)),
+                    error -> System.err.println("Ошибка задачи подписки: " + error))) {
                 readCommands(service);
             }
             System.out.println("Подписки и пул остановлены");
@@ -67,6 +70,15 @@ public final class SubscriptionsCommand implements Callable<Integer> {
             System.err.println("Не удалось прочитать команду: " + error.getMessage());
             return 1;
         }
+    }
+
+    /** Преобразует данные результата в текст только на границе консольного интерфейса. */
+    static String formatResult(SubscriptionResult result) {
+        String message = switch (result) {
+            case SubscriptionResult.PriceUpdate update -> update.price().toPlainString();
+            case SubscriptionResult.Failure failure -> "Ошибка: " + failure.cause().getMessage();
+        };
+        return "[" + result.ticker() + "] " + message;
     }
 
     /**

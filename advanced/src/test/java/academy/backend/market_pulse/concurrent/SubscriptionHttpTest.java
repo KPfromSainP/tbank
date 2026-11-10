@@ -6,6 +6,9 @@ import academy.backend.market_pulse.client.impl.HttpClientTInvestApiClient;
 import academy.backend.market_pulse.config.TInvestApiProperties;
 import academy.backend.market_pulse.dto.subscription.SubscriptionConfig;
 import academy.backend.market_pulse.dto.subscription.SubscriptionRequest;
+import academy.backend.market_pulse.dto.subscription.SubscriptionResult;
+
+import java.math.BigDecimal;
 import academy.backend.market_pulse.dto.subscription.SubscriptionTicker;
 
 import java.net.InetSocketAddress;
@@ -62,12 +65,12 @@ class SubscriptionHttpTest {
             server.start();
             var client = new HttpClientTInvestApiClient(new TInvestApiProperties("127.0.0.1",
                     server.getAddress().getPort(), Duration.ofSeconds(2), Duration.ofSeconds(5)));
-            var output = new java.util.concurrent.CopyOnWriteArrayList<String>();
+            var output = new java.util.concurrent.CopyOnWriteArrayList<SubscriptionResult>();
             QuoteSubscriptionService service = new QuoteSubscriptionService(
                     new SubscriptionConfig(1), client, line -> {
                         output.add(line);
                         nextResult.countDown();
-                    });
+                    }, error -> fail("Неожиданная ошибка задачи", error));
             try {
                 service.watch(new SubscriptionRequest("SBER", Duration.ofSeconds(1), Duration.ofMinutes(1)));
                 assertTrue(request.await(2, TimeUnit.SECONDS));
@@ -86,7 +89,7 @@ class SubscriptionHttpTest {
                 server.stop(0);
                 service.close();
             }
-            assertEquals(remove ? List.of("[GAZP] 120.50") : List.of(), output,
+            assertEquals(remove ? List.of(new SubscriptionResult.PriceUpdate("GAZP", new BigDecimal("120.50"))) : List.of(), output,
                     "Отмена не должна печатать результат или сетевую ошибку SBER");
         } finally {
             server.stop(0);

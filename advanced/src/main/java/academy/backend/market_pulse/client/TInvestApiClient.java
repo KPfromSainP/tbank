@@ -10,6 +10,8 @@ import academy.backend.market_pulse.model.Quote;
  * три реализации (см. пакет {@code client.impl}): блокирующая на {@code HttpURLConnection},
  * реакторная на {@code Selector} ({@code ReactorTInvestApiClient}) и готовая на {@code HttpClient} —
  * вызывающий код не знает и не должен знать, какая из них используется под {@link TInvestClientMode}.
+ * Подпискам дополнительно нужен контракт {@link InterruptibleTInvestApiClient}: прерываемое ожидание
+ * и безопасность одновременных вызовов. Базовый интерфейс таких гарантий не требует.
  */
 public interface TInvestApiClient {
 

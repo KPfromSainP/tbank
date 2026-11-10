@@ -11,6 +11,7 @@ import java.util.function.Consumer;
  * Interrupt во время idle-ожидания завершает worker; отмена выполняемой задачи не завершает worker.
  */
 public final class TreiberThreadPool implements AutoCloseable {
+    private static final System.Logger LOGGER = System.getLogger(TreiberThreadPool.class.getName());
     /**
      * Стек ожидающих задач; при close оставшиеся задачи отбрасываются.
      */
@@ -100,7 +101,7 @@ public final class TreiberThreadPool implements AutoCloseable {
         try {
             onFailure.accept(error);
         } catch (RuntimeException reportingError) {
-            System.err.println("Ошибка обработчика задачи: " + reportingError);
+            LOGGER.log(System.Logger.Level.ERROR, "Ошибка обработчика задачи", reportingError);
         }
     }
 

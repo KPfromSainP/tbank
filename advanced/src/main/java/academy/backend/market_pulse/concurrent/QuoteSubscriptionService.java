@@ -1,8 +1,9 @@
 package academy.backend.market_pulse.concurrent;
 
-import academy.backend.market_pulse.client.TInvestApiClient;
+import academy.backend.market_pulse.client.InterruptibleTInvestApiClient;
 import academy.backend.market_pulse.dto.subscription.SubscriptionConfig;
 import academy.backend.market_pulse.dto.subscription.SubscriptionRequest;
+import academy.backend.market_pulse.dto.subscription.SubscriptionResult;
 import academy.backend.market_pulse.dto.subscription.SubscriptionTicker;
 import academy.backend.market_pulse.model.Quote;
 
@@ -11,11 +12,12 @@ import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.locks.LockSupport;
+import java.util.function.Consumer;
 
 /**
  * Управляет временными подписками: dispatcher следит за сроками, worker-потоки загружают котировки.
  * Параметры проверяются при создании DTO; каждая подписка защищает своё состояние.
- * Для быстрой отмены клиент должен реагировать на interrupt; CLI использует HTTP_CLIENT.
+ * Клиент обеспечивает прерываемое ожидание и допускает параллельные запросы.
  * Команды watch, remove и close вызываются последовательно из потока CLI.
  * Параллельные вызовы этих команд не входят в контракт учебного сервиса.
  */
@@ -39,9 +41,9 @@ public final class QuoteSubscriptionService implements AutoCloseable {
     /**
      * Общий клиент; его реализации допускают одновременные запросы разных worker-потоков.
      */
-    private final TInvestApiClient client;
+    private final InterruptibleTInvestApiClient client;
     /**
-     * Получатель сообщений; разные тикеры могут вызывать его одновременно.
+     * Получатель результатов без консольного форматирования; вызовы разных тикеров могут пересекаться.
      */
     private final SubscriptionResultHandler resultHandler;
     /**
@@ -51,13 +53,17 @@ public final class QuoteSubscriptionService implements AutoCloseable {
 
     /**
      * Создаёт пул и запускает поток dispatcher с уже проверенными параметрами сессии.
+     *
+     * @param onTaskFailure потокобезопасный обработчик сбоев задач, в том числе ошибок resultHandler;
+     *                      вызывается worker-потоками отдельно от публикации результатов
      */
-    public QuoteSubscriptionService(SubscriptionConfig config, TInvestApiClient client,
-                                    SubscriptionResultHandler resultHandler) {
+    public QuoteSubscriptionService(SubscriptionConfig config, InterruptibleTInvestApiClient client,
+                                    SubscriptionResultHandler resultHandler,
+                                    Consumer<RuntimeException> onTaskFailure) {
         this.client = Objects.requireNonNull(client);
         this.resultHandler = Objects.requireNonNull(resultHandler);
-        // Ошибка самого callback не должна снова передаваться сломавшемуся получателю.
-        this.pool = new TreiberThreadPool(config.workers(), error -> System.err.println("Ошибка задачи подписки: " + error));
+        // NOTICE: сбой получателя результатов идёт в отдельный канал, не обратно в тот же callback.
+        this.pool = new TreiberThreadPool(config.workers(), onTaskFailure);
         this.dispatcher = Thread.ofPlatform()
                 .name("quote-dispatcher")
                 .start(this::dispatch);
@@ -72,7 +78,7 @@ public final class QuoteSubscriptionService implements AutoCloseable {
         }
         Subscription subscription = new Subscription(request);
         Subscription previous = subscriptions.get(request.ticker());
-        if (previous != null && previous.isExpiredAndIdle(System.nanoTime())) {
+        if (previous != null && previous.isExpiredAndNotRunning(System.nanoTime())) {
             // NOTICE: watch не ждёт следующего обхода dispatcher. Старый запрос ещё в стеке
             // уже не начнётся, а условное remove не затронет другую подписку этого тикера.
             subscriptions.remove(request.ticker(), previous);
@@ -116,14 +122,14 @@ public final class QuoteSubscriptionService implements AutoCloseable {
         long now = System.nanoTime();
         long delay = MAX_WAIT_NANOS;
         for (Subscription subscription : subscriptions.values()) {
-            if (subscription.isExpiredAndIdle(now)) {
+            if (subscription.isExpiredAndNotRunning(now)) {
                 subscriptions.remove(subscription.ticker(), subscription);
             } else {
                 submitIfDue(subscription, now);
                 delay = Math.min(delay, subscription.delayUntilNextCheck(now));
             }
         }
-        return delay;
+        return Math.max(1, delay);
     }
 
     /**
@@ -144,20 +150,10 @@ public final class QuoteSubscriptionService implements AutoCloseable {
             if (!subscription.beginRequest()) {
                 return;
             }
-            String message;
-            try {
-                message = loadQuote(subscription.ticker()).getPrice().toPlainString();
-            } catch (RuntimeException error) {
-                // NOTICE: клиент сохраняет флаг при InterruptedException. Подписку уже отменил
-                // remove или close; повторная отмена и удаление из Map здесь не нужны.
-                if (Thread.currentThread().isInterrupted()) {
-                    return;
-                }
-                message = "Ошибка: " + error.getMessage();
-            }
-            // NOTICE: callback находится вне catch загрузки: его ошибка уходит в обработчик пула,
-            // а не превращается в сетевую ошибку с повторным вызовом того же callback.
-            subscription.publish(message, resultHandler);
+            SubscriptionResult result = loadResult(subscription.ticker());
+            // NOTICE: publish проверяет отмену и interrupt, сохранённый клиентом.
+            // Ошибка callback не попадает в обработку ошибки загрузки котировки.
+            subscription.publish(() -> resultHandler.handle(result));
         } finally {
             subscription.finishRequest();
             wakeDispatcher();
@@ -165,15 +161,20 @@ public final class QuoteSubscriptionService implements AutoCloseable {
     }
 
     /**
-     * Загружает каталог через общий клиент и находит котировку нужного тикера.
+     * Загружает котировку или сохраняет исходную ошибку в результате, не выбирая формат вывода.
      */
-    private Quote loadQuote(String ticker) {
+    private SubscriptionResult loadResult(String ticker) {
         // NOTICE: сетевой запрос не удерживает монитор подписки, поэтому remove может
         // сразу запросить прерывание HttpClient.send, даже если сервер ещё не ответил.
-        return client.fetchQuotes().stream()
-                .filter(quote -> quote.getInstrument().getTicker().equalsIgnoreCase(ticker))
-                .findFirst()
-                .orElseThrow(() -> new IllegalArgumentException("Тикер не найден: " + ticker));
+        try {
+            Quote quote = client.fetchQuotes().stream()
+                    .filter(value -> value.getInstrument().getTicker().equalsIgnoreCase(ticker))
+                    .findFirst()
+                    .orElseThrow(() -> new IllegalArgumentException("Тикер не найден: " + ticker));
+            return new SubscriptionResult.PriceUpdate(ticker, quote.getPrice());
+        } catch (RuntimeException error) {
+            return new SubscriptionResult.Failure(ticker, error);
+        }
     }
 
     private void wakeDispatcher() {

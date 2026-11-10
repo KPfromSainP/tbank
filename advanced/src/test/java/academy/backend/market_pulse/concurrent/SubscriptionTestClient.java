@@ -1,6 +1,6 @@
 package academy.backend.market_pulse.concurrent;
 
-import academy.backend.market_pulse.client.TInvestApiClient;
+import academy.backend.market_pulse.client.InterruptibleTInvestApiClient;
 import academy.backend.market_pulse.dictionary.InstrumentType;
 import academy.backend.market_pulse.exception.TInvestApiException;
 import academy.backend.market_pulse.factory.InstrumentFactories;
@@ -18,7 +18,7 @@ final class SubscriptionTestClient {
     /**
      * Создаёт клиент, который сохраняет прерывание так же, как HttpClientTInvestApiClient.
      */
-    static TInvestApiClient from(Callable<BigDecimal> request) {
+    static InterruptibleTInvestApiClient from(Callable<BigDecimal> request) {
         return () -> {
             try {
                 BigDecimal price = request.call();

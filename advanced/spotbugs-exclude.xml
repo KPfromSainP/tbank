@@ -3,4 +3,10 @@
     <Match>
         <Package name="~.*\.benchmark(\..*)?"/>
     </Match>
+    <!-- Failure намеренно сохраняет исходное исключение, включая cause и stack trace.
+         Копирование Throwable нарушило бы диагностический контракт результата. -->
+    <Match>
+        <Class name="academy.backend.market_pulse.dto.subscription.SubscriptionResult$Failure"/>
+        <Bug pattern="EI_EXPOSE_REP,EI_EXPOSE_REP2"/>
+    </Match>
 </FindBugsFilter>

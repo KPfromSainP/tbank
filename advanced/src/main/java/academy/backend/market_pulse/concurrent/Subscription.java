@@ -2,17 +2,17 @@ package academy.backend.market_pulse.concurrent;
 
 import academy.backend.market_pulse.dto.subscription.SubscriptionRequest;
 
-import java.time.Duration;
-
 /**
  * Состояние одной подписки: сроки, поставленный запрос и выполняющий его поток.
  * Блокировка этого объекта согласует отмену и завершение только одного тикера.
+ * Запрос проходит IDLE → QUEUED → RUNNING → IDLE; runner задан только в RUNNING.
+ * Отмена независима от фазы запроса: прерванный worker ещё должен завершить текущую работу.
  */
 final class Subscription {
-    /**
-     * Предел ожидания, пока запрос уже поставлен в пул или выполняется.
-     */
-    private static final long MAX_WAIT_NANOS = Duration.ofSeconds(1).toNanos();
+    private enum RequestState {
+        IDLE, QUEUED, RUNNING
+    }
+
     /**
      * Нормализованный тикер; после создания не меняется.
      */
@@ -30,9 +30,9 @@ final class Subscription {
      */
     private long nextRun;
     /**
-     * Запрос уже ждёт worker-потока или выполняется; защищён монитором этой подписки.
+     * Фаза запроса; защищена монитором этой подписки.
      */
-    private boolean requestScheduled;
+    private RequestState requestState = RequestState.IDLE;
     /**
      * Отмена видна обработчику вывода без захвата монитора состояния подписки.
      */
@@ -64,12 +64,12 @@ final class Subscription {
      * Резервирует ровно один запрос, если наступил его срок и подписка ещё действует.
      */
     synchronized boolean scheduleIfDue(long now) {
-        if (cancelled || requestScheduled || hasExpired(now) || now - nextRun < 0) {
+        if (cancelled || requestState != RequestState.IDLE || hasExpired(now) || now - nextRun < 0) {
             return false;
         }
         // NOTICE: резервируем запрос до передачи в пул, чтобы следующий обход dispatcher
         // не добавил второй запрос для того же тикера, пока первый ещё ждёт worker-потока.
-        requestScheduled = true;
+        requestState = RequestState.QUEUED;
         return true;
     }
 
@@ -77,10 +77,11 @@ final class Subscription {
      * Привязывает запрос к worker-потоку, если подписка не отменена и не истекла в очереди.
      */
     synchronized boolean beginRequest() {
-        if (cancelled || hasExpired(System.nanoTime())) {
+        if (cancelled || requestState != RequestState.QUEUED || hasExpired(System.nanoTime())) {
             return false;
         }
         runner = Thread.currentThread();
+        requestState = RequestState.RUNNING;
         return true;
     }
 
@@ -89,7 +90,7 @@ final class Subscription {
      */
     synchronized void finishRequest() {
         runner = null;
-        requestScheduled = false;
+        requestState = RequestState.IDLE;
         nextRun = System.nanoTime() + intervalNanos;
     }
 
@@ -97,18 +98,21 @@ final class Subscription {
      * Проверяет, можно ли удалить истёкшую подписку без выполняющегося запроса.
      * Ожидающая в стеке задача не удерживает тикер: beginRequest отклонит её по сроку.
      */
-    synchronized boolean isExpiredAndIdle(long now) {
-        return hasExpired(now) && runner == null;
+    synchronized boolean isExpiredAndNotRunning(long now) {
+        return hasExpired(now) && requestState != RequestState.RUNNING;
     }
 
     /**
-     * Вычисляет время следующей проверки, не заставляя dispatcher опрашивать активный запрос.
+     * Возвращает время до запуска или истечения срока; ограничение сна выбирает dispatcher.
+     * Для работающего или отменённого запроса таймер не нужен: завершение разбудит dispatcher.
      */
     synchronized long delayUntilNextCheck(long now) {
-        if (requestScheduled || cancelled) {
-            return MAX_WAIT_NANOS;
+        if (cancelled || requestState == RequestState.RUNNING) {
+            return Long.MAX_VALUE;
         }
-        return Math.max(1, Math.min(MAX_WAIT_NANOS, Math.min(nextRun - now, expiresAt - now)));
+        long untilExpiry = expiresAt - now;
+        return Math.max(0, requestState == RequestState.QUEUED
+                ? untilExpiry : Math.min(nextRun - now, untilExpiry));
     }
 
     /**
@@ -129,14 +133,14 @@ final class Subscription {
     }
 
     /**
-     * Выводит сообщение действующей подписки, не удерживая монитор, нужный dispatcher.
+     * Выполняет публикацию действующей подписки, не удерживая монитор, нужный dispatcher.
      */
-    void publish(String message, SubscriptionResultHandler resultHandler) {
+    void publish(Runnable publication) {
         synchronized (resultLock) {
             if (!cancelled && !Thread.currentThread().isInterrupted()) {
                 // NOTICE: отдельный монитор согласует вывод с cancel. Медленный получатель
                 // сообщений не задерживает обход подписок и запуск запросов других тикеров.
-                resultHandler.handle("[" + ticker + "] " + message);
+                publication.run();
             }
         }
     }

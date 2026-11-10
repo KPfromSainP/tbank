@@ -9,6 +9,7 @@ import java.util.List;
 
 import academy.backend.market_pulse.client.InstrumentQuoteMapper;
 import academy.backend.market_pulse.client.TInvestApiClient;
+import academy.backend.market_pulse.client.InterruptibleTInvestApiClient;
 import academy.backend.market_pulse.config.TInvestApiProperties;
 import academy.backend.market_pulse.exception.TInvestApiException;
 import academy.backend.market_pulse.model.Quote;
@@ -22,7 +23,7 @@ import academy.backend.market_pulse.model.Quote;
  * <p>NOTICE: у {@link HttpClient} есть и асинхронный интерфейс ({@code sendAsync}) — запрос не
  * блокирует вызывающий поток, результат приходит «потом». К нему вернёмся в теме многопоточности.
  */
-public class HttpClientTInvestApiClient implements TInvestApiClient {
+public class HttpClientTInvestApiClient implements InterruptibleTInvestApiClient {
 
     private final HttpClient httpClient;
     private final TInvestApiProperties properties;

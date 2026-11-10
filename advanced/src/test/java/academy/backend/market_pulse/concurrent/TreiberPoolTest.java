@@ -18,6 +18,22 @@ import org.junit.jupiter.api.Timeout;
 @Timeout(10)
 class TreiberPoolTest {
     @Test
+    void failureOfTheErrorHandlerDoesNotStopTheWorker() throws Exception {
+        CountDownLatch reporting = new CountDownLatch(1);
+        CountDownLatch nextTask = new CountDownLatch(1);
+        try (var pool = new TreiberThreadPool(1, error -> {
+            reporting.countDown();
+            throw new IllegalStateException("reporting failed");
+        })) {
+            pool.submit(() -> { throw new IllegalArgumentException("task failed"); });
+            assertTrue(reporting.await(2, TimeUnit.SECONDS));
+            pool.submit(nextTask::countDown);
+
+            assertTrue(nextTask.await(2, TimeUnit.SECONDS));
+        }
+    }
+
+    @Test
     void interruptOfIdleWorkerStopsIt() throws Exception {
         AtomicReference<Thread> worker = new AtomicReference<>();
         CountDownLatch captured = new CountDownLatch(1);
