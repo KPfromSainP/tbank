@@ -44,9 +44,9 @@ public final class QuoteSubscriptionService implements AutoCloseable {
      */
     private final SubscriptionResultHandler resultHandler;
     /**
-     * Признак завершения, видимый вызывающим потокам и dispatcher без блокировки.
+     * Признак закрытия для проверки watch; используется только потоком CLI.
      */
-    private volatile boolean closed;
+    private boolean closed;
 
     /**
      * Создаёт пул и запускает поток dispatcher с уже проверенными параметрами сессии.
@@ -92,10 +92,11 @@ public final class QuoteSubscriptionService implements AutoCloseable {
      * Обходит подписки и ожидает ближайшего срока или уведомления об изменении состояния.
      */
     private void dispatch() {
-        while (!closed) {
+        while (!Thread.currentThread().isInterrupted()) {
             long delay = dispatchDueRequests();
             // NOTICE: park может вернуться без unpark. Каждый проход заново проверяет сроки;
             // unpark до park сохраняет permit и не теряет сигнал об изменении подписок.
+            // Interrupt сохраняется до проверки в while и завершает dispatcher.
             LockSupport.parkNanos(this, delay);
         }
     }
@@ -176,6 +177,7 @@ public final class QuoteSubscriptionService implements AutoCloseable {
         subscriptions.clear();
         dispatcher.interrupt();
 
+        // Временно снимаем флаг для join, запоминаем его и восстанавливаем после cleanup.
         boolean interrupted = Thread.interrupted();
         while (dispatcher.isAlive()) {
             try {

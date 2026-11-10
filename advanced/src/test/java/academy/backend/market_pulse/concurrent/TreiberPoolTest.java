@@ -8,13 +8,57 @@ import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
 @Timeout(10)
 class TreiberPoolTest {
+    @Test
+    void interruptOfIdleWorkerStopsIt() throws Exception {
+        AtomicReference<Thread> worker = new AtomicReference<>();
+        CountDownLatch captured = new CountDownLatch(1);
+        try (TreiberThreadPool pool = new TreiberThreadPool(1, error -> fail(error))) {
+            pool.submit(() -> {
+                worker.set(Thread.currentThread());
+                captured.countDown();
+            });
+            assertTrue(captured.await(2, TimeUnit.SECONDS));
+            Thread thread = worker.get();
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
+            while (thread.getState() != Thread.State.WAITING && System.nanoTime() < deadline) {
+                Thread.sleep(1);
+            }
+            assertEquals(Thread.State.WAITING, thread.getState());
+            thread.interrupt();
+            thread.join(1_000);
+            assertFalse(thread.isAlive(), "Прерывание idle worker должно завершить его цикл");
+        }
+    }
+
+    @Test
+    void taskCancellationDoesNotInterruptNextTask() throws Exception {
+        CountDownLatch firstInterrupted = new CountDownLatch(1);
+        CountDownLatch secondCompleted = new CountDownLatch(1);
+        AtomicBoolean secondSawInterrupt = new AtomicBoolean(true);
+        try (TreiberThreadPool pool = new TreiberThreadPool(1, error -> fail(error))) {
+            pool.submit(() -> {
+                Thread.currentThread().interrupt();
+                firstInterrupted.countDown();
+            });
+            assertTrue(firstInterrupted.await(2, TimeUnit.SECONDS));
+            pool.submit(() -> {
+                secondSawInterrupt.set(Thread.currentThread().isInterrupted());
+                secondCompleted.countDown();
+            });
+            assertTrue(secondCompleted.await(2, TimeUnit.SECONDS));
+            assertFalse(secondSawInterrupt.get(), "Флаг отменённой задачи не должен переходить к следующей");
+        }
+    }
+
     @Test
     void pendingTasksAreLifoAndFailuresDoNotKillWorker() throws Exception {
         List<Integer> seen = Collections.synchronizedList(new ArrayList<>());

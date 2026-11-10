@@ -8,6 +8,7 @@ import java.util.function.Consumer;
  * Фиксированный набор платформенных потоков, извлекающих задачи из стека Трайбера.
  * Последняя ожидающая задача выполняется первой; ограничений размера и гарантий справедливости нет.
  * Close вызывается владельцем после остановки всех producer; конкурентные submit и close не поддерживаются.
+ * Interrupt во время idle-ожидания завершает worker; отмена выполняемой задачи не завершает worker.
  */
 public final class TreiberThreadPool implements AutoCloseable {
     /**
@@ -58,7 +59,7 @@ public final class TreiberThreadPool implements AutoCloseable {
      * Извлекает задачи до остановки пула; если стек пуст, ожидает пробуждения.
      */
     private void work() {
-        while (!stopped) {
+        while (!stopped && !Thread.currentThread().isInterrupted()) {
             Runnable task = tasks.pop();
             if (task == null) {
                 awaitTask();
@@ -74,8 +75,9 @@ public final class TreiberThreadPool implements AutoCloseable {
     private void awaitTask() {
         // NOTICE: unpark до park сохраняет одно разрешение на продолжение.
         // Даже после неожиданного возврата из park цикл заново проверяет наличие задачи.
+        // NOTICE: interrupt тоже возвращает управление из park, сохраняя флаг.
+        // Здесь его не сбрасываем: work проверит флаг и завершит worker.
         LockSupport.park(this);
-        Thread.interrupted();
     }
 
     /**
@@ -87,8 +89,9 @@ public final class TreiberThreadPool implements AutoCloseable {
         } catch (RuntimeException error) {
             reportFailure(error);
         } finally {
-            // NOTICE: отмена относится к текущей задаче. Оставленный флаг заставил бы
-            // следующий park немедленно возвращаться и загрузил бы процессор пустым циклом.
+            // NOTICE: interrupt внутри задачи относится к этому запросу, а не ко всему worker.
+            // На границе задач сбрасываем флаг, чтобы worker мог выполнять следующие запросы.
+            // При close выход всё равно обеспечит stopped, даже если флаг здесь сброшен.
             Thread.interrupted();
         }
     }
@@ -119,6 +122,7 @@ public final class TreiberThreadPool implements AutoCloseable {
             // interrupt также пробуждает worker из park; отдельный unpark не нужен.
             worker.interrupt();
         }
+        // Временно снимаем флаг для join, запоминаем его и восстанавливаем после cleanup.
         boolean interrupted = Thread.interrupted();
         for (Thread worker : workers) {
             while (worker.isAlive()) {
