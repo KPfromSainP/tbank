@@ -15,6 +15,7 @@ import java.util.concurrent.locks.LockSupport;
 /**
  * Управляет временными подписками: dispatcher следит за сроками, worker-потоки загружают котировки.
  * Параметры проверяются при создании DTO; каждая подписка защищает своё состояние.
+ * Для быстрой отмены клиент должен реагировать на interrupt; CLI использует HTTP_CLIENT.
  * Команды watch, remove и close вызываются последовательно из потока CLI.
  * Параллельные вызовы этих команд не входят в контракт учебного сервиса.
  */
@@ -55,20 +56,27 @@ public final class QuoteSubscriptionService implements AutoCloseable {
                                     SubscriptionResultHandler resultHandler) {
         this.client = Objects.requireNonNull(client);
         this.resultHandler = Objects.requireNonNull(resultHandler);
-        this.pool = new TreiberThreadPool(config.workers(), error -> resultHandler.handle("Ошибка задачи: " + error));
+        // Ошибка самого callback не должна снова передаваться сломавшемуся получателю.
+        this.pool = new TreiberThreadPool(config.workers(), error -> System.err.println("Ошибка задачи подписки: " + error));
         this.dispatcher = Thread.ofPlatform()
                 .name("quote-dispatcher")
                 .start(this::dispatch);
     }
 
     /**
-     * Регистрирует подписку, отклоняя повторный тикер и регистрацию после закрытия сервиса.
+     * Регистрирует подписку, отклоняя активный повторный тикер и регистрацию после закрытия сервиса.
      */
     public void watch(SubscriptionRequest request) {
         if (closed) {
             throw new IllegalStateException("Сервис закрыт");
         }
         Subscription subscription = new Subscription(request);
+        Subscription previous = subscriptions.get(request.ticker());
+        if (previous != null && previous.isExpiredAndIdle(System.nanoTime())) {
+            // NOTICE: watch не ждёт следующего обхода dispatcher. Старый запрос ещё в стеке
+            // уже не начнётся, а условное remove не затронет другую подписку этого тикера.
+            subscriptions.remove(request.ticker(), previous);
+        }
         if (subscriptions.putIfAbsent(request.ticker(), subscription) != null) {
             throw new IllegalArgumentException("Подписка уже существует: " + request.ticker());
         }
@@ -136,14 +144,20 @@ public final class QuoteSubscriptionService implements AutoCloseable {
             if (!subscription.beginRequest()) {
                 return;
             }
-            Quote quote = loadQuote(subscription.ticker());
-            subscription.publish(quote.getPrice().toPlainString(), resultHandler);
-        } catch (RuntimeException error) {
-            // NOTICE: клиент сохраняет флаг при InterruptedException. Подписку уже отменил
-            // remove или close; повторная отмена и удаление из Map здесь не нужны.
-            if (!Thread.currentThread().isInterrupted()) {
-                subscription.publish("Ошибка: " + error.getMessage(), resultHandler);
+            String message;
+            try {
+                message = loadQuote(subscription.ticker()).getPrice().toPlainString();
+            } catch (RuntimeException error) {
+                // NOTICE: клиент сохраняет флаг при InterruptedException. Подписку уже отменил
+                // remove или close; повторная отмена и удаление из Map здесь не нужны.
+                if (Thread.currentThread().isInterrupted()) {
+                    return;
+                }
+                message = "Ошибка: " + error.getMessage();
             }
+            // NOTICE: callback находится вне catch загрузки: его ошибка уходит в обработчик пула,
+            // а не превращается в сетевую ошибку с повторным вызовом того же callback.
+            subscription.publish(message, resultHandler);
         } finally {
             subscription.finishRequest();
             wakeDispatcher();

@@ -23,6 +23,130 @@ import org.junit.jupiter.api.Timeout;
 @Timeout(10)
 class QuoteSubscriptionServiceTest {
     @Test
+    void duplicateWatchLeavesTheOriginalRequestRunning() throws Exception {
+        CountDownLatch started = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        CountDownLatch result = new CountDownLatch(1);
+        AtomicInteger calls = new AtomicInteger();
+        List<String> output = new CopyOnWriteArrayList<>();
+        try (var service = new QuoteSubscriptionService(new SubscriptionConfig(1),
+                SubscriptionTestClient.from(() -> {
+                    calls.incrementAndGet();
+                    started.countDown();
+                    release.await();
+                    return BigDecimal.TEN;
+                }), line -> { output.add(line); result.countDown(); })) {
+            try {
+                var request = new SubscriptionRequest("SBER", Duration.ofSeconds(5), Duration.ofSeconds(5));
+                service.watch(request);
+                assertTrue(started.await(2, TimeUnit.SECONDS));
+
+                assertThrows(IllegalArgumentException.class, () -> service.watch(request));
+                release.countDown();
+
+                assertTrue(result.await(2, TimeUnit.SECONDS));
+                assertEquals(List.of("[SBER] 10"), output);
+                assertEquals(1, calls.get());
+            } finally {
+                release.countDown();
+            }
+        }
+    }
+
+    @Test
+    void failingOutputIsNotCalledAgainToReportItsOwnFailure() throws Exception {
+        List<String> output = new CopyOnWriteArrayList<>();
+        CountDownLatch sberOutput = new CountDownLatch(1);
+        CountDownLatch gazpOutput = new CountDownLatch(1);
+        try (var service = new QuoteSubscriptionService(new SubscriptionConfig(1),
+                SubscriptionTestClient.from(() -> BigDecimal.ONE), line -> {
+                    output.add(line);
+                    if (line.startsWith("[SBER]")) {
+                        sberOutput.countDown();
+                        throw new IllegalStateException("output failed");
+                    }
+                    if (line.startsWith("[GAZP]")) { gazpOutput.countDown(); }
+                })) {
+            service.watch(new SubscriptionRequest("SBER", Duration.ofSeconds(5), Duration.ofSeconds(5)));
+            assertTrue(sberOutput.await(2, TimeUnit.SECONDS));
+            service.watch(new SubscriptionRequest("GAZP", Duration.ofSeconds(5), Duration.ofSeconds(5)));
+            assertTrue(gazpOutput.await(2, TimeUnit.SECONDS), "Ошибка callback не должна завершать worker");
+
+            assertEquals(List.of("[SBER] 1", "[GAZP] 1"), output,
+                    "Об ошибке вывода нельзя сообщать через тот же сломавшийся callback");
+        }
+    }
+
+    @Test
+    void rewatchAfterRemoveDoesNotPublishTheOldLateResponse() throws Exception {
+        CountDownLatch oldStarted = new CountDownLatch(1);
+        CountDownLatch releaseOld = new CountDownLatch(1);
+        CountDownLatch newResult = new CountDownLatch(1);
+        AtomicInteger calls = new AtomicInteger();
+        List<String> output = new CopyOnWriteArrayList<>();
+        try (var service = new QuoteSubscriptionService(new SubscriptionConfig(1),
+                SubscriptionTestClient.from(() -> {
+                    if (calls.incrementAndGet() == 1) {
+                        oldStarted.countDown();
+                        // Неисправный клиент намеренно проглатывает interrupt: результат всё равно
+                        // должен отсеяться по cancelled, даже когда флаг прерывания уже сброшен.
+                        while (true) {
+                            try { releaseOld.await(); break; }
+                            catch (InterruptedException ignored) { /* Имитируем непрерываемый клиент. */ }
+                        }
+                        return BigDecimal.TEN;
+                    }
+                    return BigDecimal.ONE;
+                }), line -> { output.add(line); newResult.countDown(); })) {
+            try {
+                service.watch(new SubscriptionRequest("SBER", Duration.ofSeconds(5), Duration.ofSeconds(5)));
+                assertTrue(oldStarted.await(2, TimeUnit.SECONDS));
+                assertTrue(service.remove(new SubscriptionTicker("SBER")));
+                service.watch(new SubscriptionRequest("SBER", Duration.ofSeconds(5), Duration.ofSeconds(5)));
+                releaseOld.countDown();
+                assertTrue(newResult.await(2, TimeUnit.SECONDS));
+                assertEquals(List.of("[SBER] 1"), output);
+                assertEquals(2, calls.get());
+            } finally {
+                releaseOld.countDown();
+            }
+        }
+    }
+
+    @Test
+    void expiredQueuedTickerCanBeRegisteredAgainBeforeWorkerIsFree() throws Exception {
+        CountDownLatch started = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        CountDownLatch gazpUpdated = new CountDownLatch(1);
+        AtomicInteger calls = new AtomicInteger();
+        try (var service = new QuoteSubscriptionService(new SubscriptionConfig(1),
+                SubscriptionTestClient.from(() -> {
+                    if (calls.incrementAndGet() == 1) {
+                        started.countDown();
+                        release.await();
+                    }
+                    return BigDecimal.ONE;
+                }), line -> {
+                    if (line.startsWith("[GAZP]")) { gazpUpdated.countDown(); }
+                })) {
+            try {
+                service.watch(new SubscriptionRequest("SBER", Duration.ofSeconds(5), Duration.ofSeconds(5)));
+                assertTrue(started.await(2, TimeUnit.SECONDS));
+                service.watch(new SubscriptionRequest("GAZP", Duration.ofSeconds(1), Duration.ofMillis(100)));
+                Thread.sleep(200); // Пересекаем lifetime, пока worker занят другим тикером.
+
+                assertDoesNotThrow(() -> service.watch(
+                        new SubscriptionRequest("GAZP", Duration.ofSeconds(5), Duration.ofSeconds(5))));
+                release.countDown();
+                assertTrue(gazpUpdated.await(2, TimeUnit.SECONDS));
+                assertEquals(2, calls.get(), "Новая подписка должна дождаться освобождения worker");
+            } finally {
+                release.countDown();
+            }
+        }
+    }
+
+    @Test
     void slowOutputOfOneTickerDoesNotBlockAnotherTicker() throws Exception {
         CountDownLatch firstOutput = new CountDownLatch(1);
         CountDownLatch releaseOutput = new CountDownLatch(1);

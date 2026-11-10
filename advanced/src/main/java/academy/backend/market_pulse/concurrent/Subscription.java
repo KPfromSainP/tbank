@@ -94,10 +94,11 @@ final class Subscription {
     }
 
     /**
-     * Проверяет, можно ли удалить истёкшую подписку без незавершённого запроса.
+     * Проверяет, можно ли удалить истёкшую подписку без выполняющегося запроса.
+     * Ожидающая в стеке задача не удерживает тикер: beginRequest отклонит её по сроку.
      */
     synchronized boolean isExpiredAndIdle(long now) {
-        return hasExpired(now) && !requestScheduled;
+        return hasExpired(now) && runner == null;
     }
 
     /**

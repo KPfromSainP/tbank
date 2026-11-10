@@ -1,6 +1,7 @@
 package academy.backend.market_pulse.cli;
 
 import academy.backend.market_pulse.client.TInvestApiClient;
+import academy.backend.market_pulse.client.impl.HttpClientTInvestApiClient;
 import academy.backend.market_pulse.concurrent.QuoteSubscriptionService;
 import academy.backend.market_pulse.dto.subscription.SubscriptionConfig;
 import academy.backend.market_pulse.dto.subscription.SubscriptionRequest;
@@ -36,12 +37,18 @@ public final class SubscriptionsCommand implements Callable<Integer> {
     }
 
     /**
-     * Создаёт сессию и освобождает её потоки при выходе, ошибке чтения или прерывании.
+     * Создаёт сессию и освобождает её потоки при выходе или ошибке чтения.
+     * Прерывание ожидания остановки сохраняется для вызывающего кода.
      */
     @Override
     public Integer call() {
         try {
             SubscriptionConfig config = new SubscriptionConfig(workers);
+            // NOTICE: remove и exit опираются на прерываемый HttpClient.send.
+            // Остальные учебные клиенты не гарантируют освобождение worker по interrupt.
+            if (!(client instanceof HttpClientTInvestApiClient)) {
+                throw new IllegalArgumentException("Для subscriptions нужен MARKET_PULSE_CLIENT=HTTP_CLIENT");
+            }
             try (var service = new QuoteSubscriptionService(config, client, System.out::println)) {
                 readCommands(service);
             }
@@ -64,6 +71,8 @@ public final class SubscriptionsCommand implements Callable<Integer> {
 
     /**
      * Читает строки до exit или конца ввода, сохраняя общий System.in открытым.
+     * Ожидание строки системной консоли не гарантирует реакцию на Thread.interrupt;
+     * штатное завершение интерактивной сессии — exit или EOF.
      */
     private void readCommands(QuoteSubscriptionService service) throws IOException {
         System.out.println("watch SBER 3s 30s — интервал после ответа и общий срок; "
