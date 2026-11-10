@@ -21,9 +21,13 @@ import org.openjdk.jcstress.infra.results.II_Result;
 @Outcome(expect = Expect.FORBIDDEN, desc = "Прочие исходы")
 @State
 public class DekkerVolatile {
-    /** Первая переменная; volatile упорядочивает доступы конкурентных участников. */
+    /**
+     * Первая переменная; volatile упорядочивает доступы конкурентных участников.
+     */
     private volatile int x;
-    /** Вторая переменная с теми же гарантиями видимости и порядка. */
+    /**
+     * Вторая переменная с теми же гарантиями видимости и порядка.
+     */
     private volatile int y;
 
     @Actor

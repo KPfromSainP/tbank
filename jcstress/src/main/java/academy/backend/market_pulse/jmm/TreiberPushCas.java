@@ -13,7 +13,7 @@ import org.openjdk.jcstress.infra.results.I_Result;
 /**
  * Цикл атомарного сравнения и замены (compare-and-set) сохраняет обе добавленные задачи.
  *
- * <p>Неизменяемые узлы не переиспользуются; AtomicReference обеспечивает публикацию вершины.
+ * <p>Неизменяемые Node не переиспользуются; AtomicReference обеспечивает публикацию вершины.
  */
 @JCStressTest
 @Outcome(id = "3", expect = Expect.ACCEPTABLE, desc = "Обе задачи доступны")
@@ -21,7 +21,9 @@ import org.openjdk.jcstress.infra.results.I_Result;
 @Outcome(expect = Expect.FORBIDDEN, desc = "Неожиданный исход")
 @State
 public class TreiberPushCas {
-    /** Вершина заменяется только при совпадении с прочитанным значением. */
+    /**
+     * Вершина заменяется только при совпадении с прочитанным значением.
+     */
     private final AtomicReference<Node> head = new AtomicReference<>();
 
     @Actor
@@ -34,7 +36,9 @@ public class TreiberPushCas {
         push(2);
     }
 
-    /** Добавляет узел с повтором сравнения и замены при конфликте. */
+    /**
+     * Добавляет узел с повтором сравнения и замены при конфликте.
+     */
     private void push(int task) {
         Node observed;
         Node update;
@@ -44,7 +48,9 @@ public class TreiberPushCas {
         } while (!head.compareAndSet(observed, update));
     }
 
-    /** Собирает итог после завершения обоих конкурентных участников. */
+    /**
+     * Собирает итог после завершения обоих конкурентных участников.
+     */
     @Arbiter
     public void readResult(I_Result result) {
         // Биты задач: 1 = первая, 2 = вторая, 3 = обе. Порядок извлечения здесь не проверяем.
@@ -55,7 +61,9 @@ public class TreiberPushCas {
         result.r1 = mask;
     }
 
-    /** Неизменяемый узел: бит задачи и ссылка на предыдущую вершину стека. */
+    /**
+     * Неизменяемый Node: бит задачи и ссылка на предыдущую вершину стека.
+     */
     private record Node(int task, Node next) {
     }
 }

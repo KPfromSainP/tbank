@@ -19,9 +19,13 @@ import org.openjdk.jcstress.infra.results.I_Result;
 @Outcome(expect = Expect.FORBIDDEN, desc = "Прочие исходы")
 @State
 public class PublicationPlain {
-    /** Обычное поле данных, записываемое до установки флага готовности. */
+    /**
+     * Обычное поле данных, записываемое до установки флага готовности.
+     */
     private int data;
-    /** Обычный флаг: его чтение не обеспечивает видимость предшествующей записи data. */
+    /**
+     * Обычный флаг: его чтение не обеспечивает видимость предшествующей записи data.
+     */
     private boolean ready;
 
     @Actor

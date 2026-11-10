@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
@@ -39,7 +40,7 @@ class TreiberPoolTest {
     }
 
     @Test
-    void shutdownDiscardsPendingTasksAndInterruptsRunningTask() throws Exception {
+    void closeDiscardsPendingTasksAndInterruptsRunningTask() throws Exception {
         CountDownLatch started = new CountDownLatch(1);
         CountDownLatch interrupted = new CountDownLatch(1);
         AtomicInteger pending = new AtomicInteger();
@@ -50,8 +51,7 @@ class TreiberPoolTest {
         });
         assertTrue(started.await(2, TimeUnit.SECONDS));
         pool.submit(pending::incrementAndGet);
-        pool.shutdown();
-        pool.awaitTermination();
+        pool.close();
         assertTrue(interrupted.await(1, TimeUnit.SECONDS));
         assertEquals(0, pending.get());
         assertThrows(IllegalStateException.class, () -> pool.submit(() -> {}));

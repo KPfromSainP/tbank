@@ -1,6 +1,8 @@
 package academy.backend.market_pulse.demo.concurrency;
 
-/** Показывает передачу необработанного исключения от группы потоков родительскому обработчику. */
+/**
+ * Показывает передачу необработанного исключения от группы потоков родительскому обработчику.
+ */
 final class LoggingThreadGroup extends ThreadGroup {
     LoggingThreadGroup(String name) {
         super(name);

@@ -19,7 +19,9 @@ import org.openjdk.jcstress.infra.results.I_Result;
 @Outcome(expect = Expect.FORBIDDEN, desc = "Прочие исходы")
 @State
 public class FinalPublication {
-    /** Обычная ссылка: публикация самой ссылки не гарантирована, в отличие от final-поля объекта. */
+    /**
+     * Обычная ссылка: публикация самой ссылки не гарантирована, в отличие от final-поля объекта.
+     */
     private FinalValueHolder holder;
 
     @Actor

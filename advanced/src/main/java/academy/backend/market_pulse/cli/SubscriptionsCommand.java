@@ -2,37 +2,47 @@ package academy.backend.market_pulse.cli;
 
 import academy.backend.market_pulse.client.TInvestApiClient;
 import academy.backend.market_pulse.concurrent.QuoteSubscriptionService;
-import academy.backend.market_pulse.dto.SubscriptionRequest;
-import academy.backend.market_pulse.dto.SubscriptionSessionOptions;
-import academy.backend.market_pulse.dto.SubscriptionTicker;
+import academy.backend.market_pulse.dto.subscription.SubscriptionConfig;
+import academy.backend.market_pulse.dto.subscription.SubscriptionRequest;
+import academy.backend.market_pulse.dto.subscription.SubscriptionTicker;
+
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.Callable;
+
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Option;
 
-/** Интерактивная сессия: проверяет введённые параметры и передаёт готовые запросы сервису подписок. */
+/**
+ * Интерактивная сессия: проверяет введённые параметры и передаёт готовые запросы сервису подписок.
+ */
 @Command(name = "subscriptions", description = "Временные подписки на котировки через учебный пул")
 public final class SubscriptionsCommand implements Callable<Integer> {
-    /** Клиент приложения; команда передаёт его сервису без дополнительной функции-загрузчика. */
+    /**
+     * Клиент приложения; команда передаёт его сервису без дополнительной функции-загрузчика.
+     */
     private final TInvestApiClient client;
 
-    /** Введённое число работников; перед созданием сервиса проверяется в SubscriptionSessionOptions. */
-    @Option(names = "--workers", defaultValue = "3", description = "Количество платформенных работников")
+    /**
+     * Введённое число worker-потоков; перед созданием сервиса проверяется в SubscriptionConfig.
+     */
+    @Option(names = "--workers", defaultValue = "3", description = "Количество платформенных worker-потоков")
     private int workers;
 
     public SubscriptionsCommand(TInvestApiClient client) {
         this.client = client;
     }
 
-    /** Создаёт сессию и освобождает её потоки при выходе, ошибке чтения или прерывании. */
+    /**
+     * Создаёт сессию и освобождает её потоки при выходе, ошибке чтения или прерывании.
+     */
     @Override
     public Integer call() {
         try {
-            SubscriptionSessionOptions options = new SubscriptionSessionOptions(workers);
-            try (var service = new QuoteSubscriptionService(options, client, System.out::println)) {
+            SubscriptionConfig config = new SubscriptionConfig(workers);
+            try (var service = new QuoteSubscriptionService(config, client, System.out::println)) {
                 readCommands(service);
             }
             System.out.println("Подписки и пул остановлены");
@@ -52,7 +62,9 @@ public final class SubscriptionsCommand implements Callable<Integer> {
         }
     }
 
-    /** Читает строки до exit или конца ввода, сохраняя общий System.in открытым. */
+    /**
+     * Читает строки до exit или конца ввода, сохраняя общий System.in открытым.
+     */
     private void readCommands(QuoteSubscriptionService service) throws IOException {
         System.out.println("watch SBER 3s 30s — интервал после ответа и общий срок; "
                 + "remove SBER — отменить подписку; exit — остановить всё");
@@ -69,7 +81,9 @@ public final class SubscriptionsCommand implements Callable<Integer> {
         }
     }
 
-    /** Проверяет формат строки и сообщает об ошибке, не завершая интерактивную сессию. */
+    /**
+     * Проверяет формат строки и сообщает об ошибке, не завершая интерактивную сессию.
+     */
     private void executeCommand(String command, QuoteSubscriptionService service) {
         String[] parts = command.split("\\s+");
         try {
@@ -85,7 +99,9 @@ public final class SubscriptionsCommand implements Callable<Integer> {
         }
     }
 
-    /** Создаёт проверенный объект параметров подписки и регистрирует его в сервисе. */
+    /**
+     * Создаёт проверенный объект параметров подписки и регистрирует его в сервисе.
+     */
     private void watch(String[] parts, QuoteSubscriptionService service) {
         // NOTICE: сервис получает уже нормализованный тикер и проверенные длительности.
         SubscriptionRequest request = SubscriptionRequest.parse(parts[1], parts[2], parts[3]);
@@ -93,7 +109,9 @@ public final class SubscriptionsCommand implements Callable<Integer> {
         System.out.println("Подписка принята: " + request.ticker());
     }
 
-    /** Проверяет тикер и сообщает, существовала ли отменяемая подписка. */
+    /**
+     * Проверяет тикер и сообщает, существовала ли отменяемая подписка.
+     */
     private void remove(String value, QuoteSubscriptionService service) {
         SubscriptionTicker ticker = new SubscriptionTicker(value);
         boolean removed = service.remove(ticker);

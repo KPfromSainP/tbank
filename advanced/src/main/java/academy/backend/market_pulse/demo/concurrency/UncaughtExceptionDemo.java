@@ -2,13 +2,16 @@ package academy.backend.market_pulse.demo.concurrency;
 
 import java.util.concurrent.atomic.AtomicReference;
 
-/** finally → обработчик в падающем потоке → TERMINATED; join не перебрасывает его исключение. */
+/**
+ * finally → обработчик в падающем потоке → TERMINATED; join не перебрасывает его исключение.
+ */
 public final class UncaughtExceptionDemo {
     private static void fail() { throw new IllegalStateException("Ошибка фоновой задачи"); }
 
     public static void main(String[] args) throws InterruptedException {
         var observed = new AtomicReference<Throwable>();
-        Thread worker = Thread.ofPlatform().name("failing-worker")
+        Thread worker = Thread.ofPlatform()
+                .name("failing-worker")
                 .uncaughtExceptionHandler((thread, error) -> {
                     System.out.println("handler: " + thread.getName() + ", выполняется в "
                             + Thread.currentThread().getName() + ", ошибка: " + error);
@@ -18,16 +21,18 @@ public final class UncaughtExceptionDemo {
                     finally { System.out.println("finally: освобождение ресурсов перед handler"); }
                 });
         worker.start();
-        worker.join(); // исключение работника не перебрасывается в main
+        worker.join(); // исключение worker-потока не перебрасывается в main
         System.out.println("После join: " + worker.getState() + "; main продолжает работу");
         if (!(observed.get() instanceof IllegalStateException)
                 || worker.getState() != Thread.State.TERMINATED) {
-            throw new AssertionError("Обработчик должен получить ошибку, работник — завершиться");
+            throw new AssertionError("Обработчик должен получить ошибку, worker — завершиться");
         }
         demonstrateHandlerDelegation();
     }
 
-    /** Сравнивает делегирование группе и общему обработчику с индивидуальным обработчиком потока. */
+    /**
+     * Сравнивает делегирование группе и общему обработчику с индивидуальным обработчиком потока.
+     */
     private static void demonstrateHandlerDelegation() throws InterruptedException {
         Thread.UncaughtExceptionHandler previous = Thread.getDefaultUncaughtExceptionHandler();
         try {

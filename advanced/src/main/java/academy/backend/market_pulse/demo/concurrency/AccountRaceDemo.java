@@ -2,9 +2,13 @@ package academy.backend.market_pulse.demo.concurrency;
 
 import java.util.concurrent.CountDownLatch;
 
-/** Два списания по 80 при балансе 100: защищать нужно проверку вместе с изменением. */
+/**
+ * Два списания по 80 при балансе 100: защищать нужно проверку вместе с изменением.
+ */
 public final class AccountRaceDemo {
-    /** Сравнивает ошибочное списание с целостной операцией и проверяет итоговые балансы. */
+    /**
+     * Сравнивает ошибочное списание с целостной операцией и проверяет итоговые балансы.
+     */
     public static void main(String[] args) throws InterruptedException {
         WithdrawalAccount unsafe = demonstrateStaleCheck();
         WithdrawalAccount safe = new WithdrawalAccount();
@@ -17,7 +21,9 @@ public final class AccountRaceDemo {
         }
     }
 
-    /** Заставляет оба потока проверить баланс до первого изменения, воспроизводя гонку. */
+    /**
+     * Заставляет оба потока проверить баланс до первого изменения, воспроизводя гонку.
+     */
     private static WithdrawalAccount demonstrateStaleCheck() throws InterruptedException {
         WithdrawalAccount account = new WithdrawalAccount();
         CountDownLatch bothChecked = new CountDownLatch(2);
@@ -43,10 +49,16 @@ public final class AccountRaceDemo {
                 account.successfulWithdrawals(), account.balance());
     }
 
-    /** Запускает два конкурентных действия и не оставляет их работать при прерывании main. */
+    /**
+     * Запускает два конкурентных действия и не оставляет их работать при прерывании main.
+     */
     private static void runPair(Runnable action) throws InterruptedException {
-        Thread first = Thread.ofPlatform().name("withdrawal-1").unstarted(action);
-        Thread second = Thread.ofPlatform().name("withdrawal-2").unstarted(action);
+        Thread first = Thread.ofPlatform()
+                .name("withdrawal-1")
+                .unstarted(action);
+        Thread second = Thread.ofPlatform()
+                .name("withdrawal-2")
+                .unstarted(action);
         first.start();
         second.start();
         try {

@@ -3,17 +3,25 @@ package academy.backend.market_pulse.demo.concurrency;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.locks.LockSupport;
 
-/** Одно разрешение на уже запущенный поток; ложные возвраты требуют повторной проверки условия. */
+/**
+ * Одно разрешение на уже запущенный поток; ложные возвраты требуют повторной проверки условия.
+ */
 public final class ParkingDemo {
-    /** Разрешает работнику дойти до первого park только после двух unpark. */
+    /**
+     * Разрешает worker-потоку дойти до первого park только после двух unpark.
+     */
     private static volatile boolean go;
-    /** Условие завершения ожидания; отдельно от разрешения, которое хранит LockSupport. */
+    /**
+     * Условие завершения ожидания; отдельно от разрешения, которое хранит LockSupport.
+     */
     private static volatile boolean released;
     public static void main(String[] args) throws InterruptedException {
         LockSupport.getBlocker(Thread.currentThread()); // закончить инициализацию до опыта
         var started = new CountDownLatch(1);
         var firstReturned = new CountDownLatch(1);
-        Thread worker = Thread.ofPlatform().name("parking-demo").start(() -> {
+        Thread worker = Thread.ofPlatform()
+                .name("parking-demo")
+                .start(() -> {
             started.countDown();
             while (!go && !Thread.currentThread().isInterrupted()) { Thread.onSpinWait(); }
             if (Thread.currentThread().isInterrupted()) { return; } // без промежуточного park

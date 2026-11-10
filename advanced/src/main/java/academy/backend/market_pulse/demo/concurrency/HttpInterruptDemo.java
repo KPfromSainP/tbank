@@ -1,6 +1,8 @@
 package academy.backend.market_pulse.demo.concurrency;
 
-/** Сравнивает отмену HttpClient.send и HttpURLConnection на локальном сервере с задержкой тела. */
+/**
+ * Сравнивает отмену HttpClient.send и HttpURLConnection на локальном сервере с задержкой тела.
+ */
 public final class HttpInterruptDemo {
     public static void main(String[] args) throws Exception {
         String mode = args.length == 0 ? "both" : args[0];

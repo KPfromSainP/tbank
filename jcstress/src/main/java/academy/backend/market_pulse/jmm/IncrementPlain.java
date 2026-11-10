@@ -19,7 +19,9 @@ import org.openjdk.jcstress.infra.results.I_Result;
 @Outcome(expect = Expect.FORBIDDEN, desc = "Прочие исходы")
 @State
 public class IncrementPlain {
-    /** Общий счётчик; чтение, увеличение и запись намеренно не объединены в одну операцию. */
+    /**
+     * Общий счётчик; чтение, увеличение и запись намеренно не объединены в одну операцию.
+     */
     private int counter;
 
     @Actor
@@ -32,7 +34,9 @@ public class IncrementPlain {
         counter++;
     }
 
-    /** Собирает итог после завершения обоих конкурентных участников. */
+    /**
+     * Собирает итог после завершения обоих конкурентных участников.
+     */
     @Arbiter
     public void readResult(I_Result result) {
         result.r1 = counter;

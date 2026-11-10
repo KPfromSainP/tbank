@@ -1,7 +1,5 @@
 package academy.backend.market_pulse.demo.concurrency;
 
-import com.sun.net.httpserver.HttpExchange;
-import com.sun.net.httpserver.HttpServer;
 import java.io.IOException;
 import java.net.HttpURLConnection;
 import java.net.InetSocketAddress;
@@ -16,39 +14,64 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
+import com.sun.net.httpserver.HttpExchange;
+import com.sun.net.httpserver.HttpServer;
+
 /**
  * Один опыт отмены запроса: сервер отправляет заголовки, а тело удерживает до разрешения main.
  * Владеет сервером, клиентом и работником и освобождает их при завершении опыта.
  */
 final class HttpInterruptExperiment implements AutoCloseable {
-    /** true выбирает HttpClient.send, false — чтение через HttpURLConnection. */
+    /**
+     * true выбирает HttpClient.send, false — чтение через HttpURLConnection.
+     */
     private final boolean modern;
-    /** Подтверждает, что сервер уже получил запрос и отправил заголовки. */
+    /**
+     * Подтверждает, что сервер уже получил запрос и отправил заголовки.
+     */
     private final CountDownLatch headersSent = new CountDownLatch(1);
-    /** Удерживает тело ответа, пока основной поток проверяет реакцию на interrupt. */
+    /**
+     * Удерживает тело ответа, пока основной поток проверяет реакцию на interrupt.
+     */
     private final CountDownLatch releaseBody = new CountDownLatch(1);
-    /** Сигнал завершения работника, независимый от успешности запроса. */
+    /**
+     * Сигнал завершения worker-потока, независимый от успешности запроса.
+     */
     private final CountDownLatch finished = new CountDownLatch(1);
-    /** Передаёт ошибку работника основному потоку для проверки результата опыта. */
+    /**
+     * Передаёт ошибку worker-потока основному потоку для проверки результата опыта.
+     */
     private final AtomicReference<Throwable> failure = new AtomicReference<>();
-    /** Заранее известное тело ответа, позволяющее проверить завершившееся чтение. */
+    /**
+     * Заранее известное тело ответа, позволяющее проверить завершившееся чтение.
+     */
     private final byte[] body = "quote=42".getBytes(StandardCharsets.UTF_8);
-    /** Локальный сервер на свободном порту; внешняя сеть для опыта не используется. */
+    /**
+     * Локальный сервер на свободном порту; внешняя сеть для опыта не используется.
+     */
     private final HttpServer server;
-    /** Клиент создаётся до работника, чтобы interrupt не пришёлся на его инициализацию. */
+    /**
+     * Клиент создаётся до worker-потока, чтобы interrupt не пришёлся на его инициализацию.
+     */
     private final HttpClient httpClient;
-    /** Работник выполняет единственный запрос и получает interrupt из main. */
+    /**
+     * Worker выполняет единственный запрос и получает interrupt из main.
+     */
     private final Thread worker;
 
     HttpInterruptExperiment(boolean modern) throws IOException {
         this.modern = modern;
-        server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        this.server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         server.createContext("/quote", this::respond);
-        httpClient = modern ? HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(3)).build() : null;
-        worker = Thread.ofPlatform().name("http-interrupt-demo").unstarted(this::request);
+        this.httpClient = modern ? HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(3)).build() : null;
+        this.worker = Thread.ofPlatform()
+                .name("http-interrupt-demo")
+                .unstarted(this::request);
     }
 
-    /** Прерывает запрос после заголовков и проверяет, нужен ли ответ для завершения работника. */
+    /**
+     * Прерывает запрос после заголовков и проверяет, нужен ли ответ для завершения worker-потока.
+     */
     void run() throws InterruptedException {
         System.out.println("\n--- " + (modern ? "HttpClient.send" : "HttpURLConnection") + ": платформенный поток ---");
         server.start();
@@ -64,7 +87,9 @@ final class HttpInterruptExperiment implements AutoCloseable {
         }
     }
 
-    /** Отправляет заголовки сразу, а тело — только после разрешения основного потока. */
+    /**
+     * Отправляет заголовки сразу, а тело — только после разрешения основного потока.
+     */
     private void respond(HttpExchange exchange) {
         try (exchange) {
             exchange.sendResponseHeaders(200, body.length);
@@ -95,7 +120,9 @@ final class HttpInterruptExperiment implements AutoCloseable {
         }
     }
 
-    /** Проверяет прерываемое ожидание send и восстанавливает сброшенный исключением флаг. */
+    /**
+     * Проверяет прерываемое ожидание send и восстанавливает сброшенный исключением флаг.
+     */
     private void receiveWithHttpClient(URI uri) throws IOException {
         try {
             httpClient.send(HttpRequest.newBuilder(uri).build(), HttpResponse.BodyHandlers.ofString());
@@ -107,7 +134,9 @@ final class HttpInterruptExperiment implements AutoCloseable {
         }
     }
 
-    /** Читает тело через API, у которого interrupt платформенного потока не отменяет чтение. */
+    /**
+     * Читает тело через API, у которого interrupt платформенного потока не отменяет чтение.
+     */
     private void receiveWithUrlConnection(URI uri) throws IOException {
         HttpURLConnection connection = (HttpURLConnection) uri.toURL().openConnection(Proxy.NO_PROXY);
         connection.setConnectTimeout(3_000);
@@ -123,7 +152,9 @@ final class HttpInterruptExperiment implements AutoCloseable {
         }
     }
 
-    /** Проверяет разницу между отменой send и завершением чтения только после получения тела. */
+    /**
+     * Проверяет разницу между отменой send и завершением чтения только после получения тела.
+     */
     private void verifyCancellation() throws InterruptedException {
         if (modern) {
             if (!finished.await(5, TimeUnit.SECONDS)) {

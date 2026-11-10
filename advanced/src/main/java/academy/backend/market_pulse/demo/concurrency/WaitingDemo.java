@@ -2,16 +2,22 @@ package academy.backend.market_pulse.demo.concurrency;
 
 import java.util.concurrent.CountDownLatch;
 
-/** sleep удерживает монитор; wait освобождает монитор и возвращается после его повторного захвата. */
+/**
+ * sleep удерживает монитор; wait освобождает монитор и возвращается после его повторного захвата.
+ */
 public final class WaitingDemo {
-    /** Условие продолжения waiter; все обращения выполняются под монитором опыта. */
+    /**
+     * Условие продолжения waiter; все обращения выполняются под монитором опыта.
+     */
     private static boolean ready;
     public static void main(String[] args) throws InterruptedException {
         demonstrateSleep();
         demonstrateWait();
     }
 
-    /** Проверяет, что другой поток не может захватить монитор, пока его владелец спит. */
+    /**
+     * Проверяет, что другой поток не может захватить монитор, пока его владелец спит.
+     */
     private static void demonstrateSleep() throws InterruptedException {
         Object monitor = new Object();
         var entered = new CountDownLatch(1);
@@ -32,7 +38,9 @@ public final class WaitingDemo {
         sleeper.interrupt(); sleeper.join(); contender.join();
     }
 
-    /** Ожидает условие через wait, освобождая монитор для потока, который устанавливает условие. */
+    /**
+     * Ожидает условие через wait, освобождая монитор для потока, который устанавливает условие.
+     */
     private static void demonstrateWait() throws InterruptedException {
         Object monitor = new Object();
         var aboutToWait = new CountDownLatch(1);

@@ -2,20 +2,24 @@ package academy.backend.market_pulse.concurrent;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import academy.backend.market_pulse.dto.subscription.SubscriptionConfig;
+import academy.backend.market_pulse.dto.subscription.SubscriptionRequest;
+import academy.backend.market_pulse.dto.subscription.SubscriptionTicker;
+
 import java.math.BigDecimal;
-import academy.backend.market_pulse.dto.SubscriptionRequest;
-import academy.backend.market_pulse.dto.SubscriptionSessionOptions;
-import academy.backend.market_pulse.dto.SubscriptionTicker;
 import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
-/** Проверяет сроки подписок, независимость тикеров, отмену и освобождение потоков. */
+/**
+ * Проверяет сроки подписок, независимость тикеров, отмену и освобождение потоков.
+ */
 @Timeout(10)
 class QuoteSubscriptionServiceTest {
     @Test
@@ -23,7 +27,7 @@ class QuoteSubscriptionServiceTest {
         CountDownLatch firstOutput = new CountDownLatch(1);
         CountDownLatch releaseOutput = new CountDownLatch(1);
         CountDownLatch secondOutput = new CountDownLatch(2);
-        try (var service = new QuoteSubscriptionService(new SubscriptionSessionOptions(2),
+        try (var service = new QuoteSubscriptionService(new SubscriptionConfig(2),
                 SubscriptionTestClient.from(() -> BigDecimal.ONE), line -> {
                     if (line.startsWith("[SBER]")) {
                         firstOutput.countDown();
@@ -46,7 +50,7 @@ class QuoteSubscriptionServiceTest {
 
     @Test
     void closePreservesCallingThreadsInterruptFlag() {
-        QuoteSubscriptionService service = new QuoteSubscriptionService(new SubscriptionSessionOptions(1), SubscriptionTestClient.from(() -> BigDecimal.ONE), line -> {});
+        QuoteSubscriptionService service = new QuoteSubscriptionService(new SubscriptionConfig(1), SubscriptionTestClient.from(() -> BigDecimal.ONE), line -> {});
         Thread.currentThread().interrupt();
         try {
             assertThrows(InterruptedException.class, service::close);
@@ -62,7 +66,7 @@ class QuoteSubscriptionServiceTest {
         CountDownLatch cancelled = new CountDownLatch(1);
         CountDownLatch otherUpdated = new CountDownLatch(1);
         AtomicInteger sberCalls = new AtomicInteger();
-        try (QuoteSubscriptionService service = new QuoteSubscriptionService(new SubscriptionSessionOptions(2), SubscriptionTestClient.from(() -> {
+        try (QuoteSubscriptionService service = new QuoteSubscriptionService(new SubscriptionConfig(2), SubscriptionTestClient.from(() -> {
             if (sberCalls.incrementAndGet() == 1) {
                 started.countDown();
                 try {
@@ -92,7 +96,7 @@ class QuoteSubscriptionServiceTest {
         CountDownLatch completed = new CountDownLatch(1);
         AtomicInteger removedCalls = new AtomicInteger();
         AtomicInteger catalogueCalls = new AtomicInteger();
-        try (QuoteSubscriptionService service = new QuoteSubscriptionService(new SubscriptionSessionOptions(1), SubscriptionTestClient.from(() -> {
+        try (QuoteSubscriptionService service = new QuoteSubscriptionService(new SubscriptionConfig(1), SubscriptionTestClient.from(() -> {
             if (catalogueCalls.incrementAndGet() == 1) {
                 busy.countDown();
                 release.await();
@@ -118,7 +122,7 @@ class QuoteSubscriptionServiceTest {
         CountDownLatch started = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);
         List<String> output = new CopyOnWriteArrayList<>();
-        try (QuoteSubscriptionService service = new QuoteSubscriptionService(new SubscriptionSessionOptions(2), SubscriptionTestClient.from(() -> {
+        try (QuoteSubscriptionService service = new QuoteSubscriptionService(new SubscriptionConfig(2), SubscriptionTestClient.from(() -> {
             calls.incrementAndGet();
             started.countDown();
             release.await();
@@ -142,7 +146,7 @@ class QuoteSubscriptionServiceTest {
         CountDownLatch firstDone = new CountDownLatch(1);
         AtomicInteger expiredCalls = new AtomicInteger();
         AtomicInteger catalogueCalls = new AtomicInteger();
-        try (QuoteSubscriptionService service = new QuoteSubscriptionService(new SubscriptionSessionOptions(1), SubscriptionTestClient.from(() -> {
+        try (QuoteSubscriptionService service = new QuoteSubscriptionService(new SubscriptionConfig(1), SubscriptionTestClient.from(() -> {
             if (catalogueCalls.incrementAndGet() == 1) {
                 started.countDown();
                 release.await();
@@ -168,7 +172,7 @@ class QuoteSubscriptionServiceTest {
         CountDownLatch retryStarted = new CountDownLatch(1);
         CountDownLatch interrupted = new CountDownLatch(1);
         List<String> output = new CopyOnWriteArrayList<>();
-        QuoteSubscriptionService service = new QuoteSubscriptionService(new SubscriptionSessionOptions(1), SubscriptionTestClient.from(() -> {
+        QuoteSubscriptionService service = new QuoteSubscriptionService(new SubscriptionConfig(1), SubscriptionTestClient.from(() -> {
             if (calls.incrementAndGet() == 1) { throw new IllegalStateException("network failed"); }
             retryStarted.countDown();
             try { Thread.sleep(60_000); } catch (InterruptedException e) { interrupted.countDown(); throw e; }

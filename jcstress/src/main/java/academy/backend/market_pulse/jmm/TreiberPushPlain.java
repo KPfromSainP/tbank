@@ -19,7 +19,9 @@ import org.openjdk.jcstress.infra.results.I_Result;
 @Outcome(expect = Expect.FORBIDDEN, desc = "Неожиданный исход")
 @State
 public class TreiberPushPlain {
-    /** Обычная вершина стека: два участника могут затереть обновления друг друга. */
+    /**
+     * Обычная вершина стека: два участника могут затереть обновления друг друга.
+     */
     private Node head;
 
     @Actor
@@ -32,14 +34,18 @@ public class TreiberPushPlain {
         push(2);
     }
 
-    /** Добавляет узел намеренно неатомарным чтением и записью вершины. */
+    /**
+     * Добавляет узел намеренно неатомарным чтением и записью вершины.
+     */
     private void push(int task) {
         Node observed = head;
         // Между чтением и записью другой actor может опубликовать собственный узел.
         head = new Node(task, observed);
     }
 
-    /** Собирает итог после завершения обоих конкурентных участников. */
+    /**
+     * Собирает итог после завершения обоих конкурентных участников.
+     */
     @Arbiter
     public void readResult(I_Result result) {
         // Биты задач: 1 = первая, 2 = вторая, 3 = обе. Порядок извлечения здесь не проверяем.
@@ -50,7 +56,9 @@ public class TreiberPushPlain {
         result.r1 = mask;
     }
 
-    /** Неизменяемый узел: бит задачи и ссылка на предыдущую вершину стека. */
+    /**
+     * Неизменяемый Node: бит задачи и ссылка на предыдущую вершину стека.
+     */
     private record Node(int task, Node next) {
     }
 }

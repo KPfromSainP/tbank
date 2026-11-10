@@ -6,13 +6,18 @@ import academy.backend.market_pulse.exception.TInvestApiException;
 import academy.backend.market_pulse.factory.InstrumentFactories;
 import academy.backend.market_pulse.model.Currency;
 import academy.backend.market_pulse.model.Quote;
+
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.concurrent.Callable;
 
-/** Клиент для тестов: управляемое ожидание запроса и каталог из двух инструментов. */
+/**
+ * Клиент для тестов: управляемое ожидание запроса и каталог из двух инструментов.
+ */
 final class SubscriptionTestClient {
-    /** Создаёт клиент, который сохраняет прерывание так же, как HttpClientTInvestApiClient. */
+    /**
+     * Создаёт клиент, который сохраняет прерывание так же, как HttpClientTInvestApiClient.
+     */
     static TInvestApiClient from(Callable<BigDecimal> request) {
         return () -> {
             try {
@@ -29,7 +34,9 @@ final class SubscriptionTestClient {
         };
     }
 
-    /** Создаёт полноценную котировку с инструментом для выбора по тикеру в реальном сервисе. */
+    /**
+     * Создаёт полноценную котировку с инструментом для выбора по тикеру в реальном сервисе.
+     */
     private static Quote quote(String ticker, BigDecimal price) {
         return new Quote(InstrumentFactories.create(InstrumentType.STOCK, ticker, ticker, Currency.RUB),
                 price, BigDecimal.ZERO);

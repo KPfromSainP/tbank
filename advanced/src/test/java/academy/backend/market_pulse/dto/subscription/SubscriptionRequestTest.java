@@ -1,12 +1,16 @@
-package academy.backend.market_pulse.dto;
+package academy.backend.market_pulse.dto.subscription;
 
 import static org.junit.jupiter.api.Assertions.*;
+
 import java.time.Duration;
+
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
-/** Проверяет параметры на границе команды, до создания потоков и регистрации подписки. */
+/**
+ * Проверяет параметры на границе команды, до создания потоков и регистрации подписки.
+ */
 class SubscriptionRequestTest {
     @Test
     void parsesUnitsAndNormalizesTicker() {
@@ -37,7 +41,7 @@ class SubscriptionRequestTest {
                 () -> new SubscriptionRequest("SBER", Duration.ZERO, Duration.ofSeconds(1)));
         assertThrows(IllegalArgumentException.class,
                 () -> new SubscriptionRequest("SBER", Duration.ofSeconds(1), Duration.ofDays(8)));
-        assertThrows(IllegalArgumentException.class, () -> new SubscriptionSessionOptions(0));
-        assertThrows(IllegalArgumentException.class, () -> new SubscriptionSessionOptions(-1));
+        assertThrows(IllegalArgumentException.class, () -> new SubscriptionConfig(0));
+        assertThrows(IllegalArgumentException.class, () -> new SubscriptionConfig(-1));
     }
 }

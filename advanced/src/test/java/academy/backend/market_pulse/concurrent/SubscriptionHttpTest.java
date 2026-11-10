@@ -2,22 +2,26 @@ package academy.backend.market_pulse.concurrent;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-import com.sun.net.httpserver.HttpServer;
 import academy.backend.market_pulse.client.impl.HttpClientTInvestApiClient;
 import academy.backend.market_pulse.config.TInvestApiProperties;
-import academy.backend.market_pulse.dto.SubscriptionRequest;
-import academy.backend.market_pulse.dto.SubscriptionSessionOptions;
-import academy.backend.market_pulse.dto.SubscriptionTicker;
+import academy.backend.market_pulse.dto.subscription.SubscriptionConfig;
+import academy.backend.market_pulse.dto.subscription.SubscriptionRequest;
+import academy.backend.market_pulse.dto.subscription.SubscriptionTicker;
+
 import java.net.InetSocketAddress;
 import java.time.Duration;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+
+import com.sun.net.httpserver.HttpServer;
+import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
-import org.junit.jupiter.api.Timeout;
 
-/** Проверяет отмену настоящего HTTP-клиента сервиса до получения тела ответа. */
+/**
+ * Проверяет отмену настоящего HTTP-клиента сервиса до получения тела ответа.
+ */
 @Timeout(10)
 class SubscriptionHttpTest {
     @ParameterizedTest
@@ -46,7 +50,7 @@ class SubscriptionHttpTest {
                     server.getAddress().getPort(), Duration.ofSeconds(2), Duration.ofSeconds(5)));
             var output = new java.util.concurrent.CopyOnWriteArrayList<String>();
             QuoteSubscriptionService service = new QuoteSubscriptionService(
-                    new SubscriptionSessionOptions(1), client, output::add);
+                    new SubscriptionConfig(1), client, output::add);
             try {
                 service.watch(new SubscriptionRequest("SBER", Duration.ofSeconds(1), Duration.ofMinutes(1)));
                 assertTrue(request.await(2, TimeUnit.SECONDS));
