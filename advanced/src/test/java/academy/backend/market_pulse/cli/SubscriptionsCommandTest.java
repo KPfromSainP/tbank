@@ -21,6 +21,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
+import org.junit.jupiter.params.provider.EnumSource;
+import academy.backend.market_pulse.dto.subscription.SubscriptionEngine;
 import picocli.CommandLine;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -42,12 +44,13 @@ class SubscriptionsCommandTest {
                 new SubscriptionResult.Failure("SBER", new IllegalStateException("network failed"))));
     }
 
-    @Test
-    void acceptsAnAlternativeClientWithTheInterruptibleContract() {
+    @ParameterizedTest
+    @EnumSource(SubscriptionEngine.class)
+    void acceptsAnAlternativeClientWithTheInterruptibleContract(SubscriptionEngine engine) {
         InterruptibleTInvestApiClient client = List::of;
         System.setIn(new ByteArrayInputStream(new byte[0]));
 
-        assertEquals(0, new CommandLine(new SubscriptionsCommand(client)).execute());
+        assertEquals(0, new CommandLine(new SubscriptionsCommand(client)).execute("--engine", engine.name()));
         assertTrue(output.toString(StandardCharsets.UTF_8).contains("Подписки и пул остановлены"));
     }
 

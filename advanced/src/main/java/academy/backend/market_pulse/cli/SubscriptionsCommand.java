@@ -2,7 +2,8 @@ package academy.backend.market_pulse.cli;
 
 import academy.backend.market_pulse.client.TInvestApiClient;
 import academy.backend.market_pulse.client.InterruptibleTInvestApiClient;
-import academy.backend.market_pulse.concurrent.QuoteSubscriptionService;
+import academy.backend.market_pulse.concurrent.QuoteSubscriptions;
+import academy.backend.market_pulse.dto.subscription.SubscriptionEngine;
 import academy.backend.market_pulse.dto.subscription.SubscriptionConfig;
 import academy.backend.market_pulse.dto.subscription.SubscriptionRequest;
 import academy.backend.market_pulse.dto.subscription.SubscriptionResult;
@@ -33,6 +34,10 @@ public final class SubscriptionsCommand implements Callable<Integer> {
     @Option(names = "--workers", defaultValue = "3", description = "Количество платформенных worker-потоков")
     private int workers;
 
+    @Option(names = "--engine", defaultValue = "executor",
+            description = "Вариант исполнения: ${COMPLETION-CANDIDATES}")
+    private SubscriptionEngine engine;
+
     public SubscriptionsCommand(TInvestApiClient client) {
         this.client = client;
     }
@@ -50,7 +55,7 @@ public final class SubscriptionsCommand implements Callable<Integer> {
                 throw new IllegalArgumentException("Для subscriptions нужен прерываемый клиент; "
                         + "выберите MARKET_PULSE_CLIENT=HTTP_CLIENT");
             }
-            try (var service = new QuoteSubscriptionService(config, interruptibleClient,
+            try (var service = QuoteSubscriptions.create(engine, config, interruptibleClient,
                     result -> System.out.println(formatResult(result)),
                     error -> System.err.println("Ошибка задачи подписки: " + error))) {
                 readCommands(service);
@@ -86,7 +91,7 @@ public final class SubscriptionsCommand implements Callable<Integer> {
      * Ожидание строки системной консоли не гарантирует реакцию на Thread.interrupt;
      * штатное завершение интерактивной сессии — exit или EOF.
      */
-    private void readCommands(QuoteSubscriptionService service) throws IOException {
+    private void readCommands(QuoteSubscriptions service) throws IOException {
         System.out.println("watch SBER 3s 30s — интервал после ответа и общий срок; "
                 + "remove SBER — отменить подписку; exit — остановить всё");
         var input = new BufferedReader(new InputStreamReader(System.in, StandardCharsets.UTF_8));
@@ -105,7 +110,7 @@ public final class SubscriptionsCommand implements Callable<Integer> {
     /**
      * Проверяет формат строки и сообщает об ошибке, не завершая интерактивную сессию.
      */
-    private void executeCommand(String command, QuoteSubscriptionService service) {
+    private void executeCommand(String command, QuoteSubscriptions service) {
         String[] parts = command.split("\\s+");
         try {
             if (parts.length == 4 && parts[0].equalsIgnoreCase("watch")) {
@@ -123,7 +128,7 @@ public final class SubscriptionsCommand implements Callable<Integer> {
     /**
      * Создаёт проверенный объект параметров подписки и регистрирует его в сервисе.
      */
-    private void watch(String[] parts, QuoteSubscriptionService service) {
+    private void watch(String[] parts, QuoteSubscriptions service) {
         // NOTICE: сервис получает уже нормализованный тикер и проверенные длительности.
         SubscriptionRequest request = SubscriptionRequest.parse(parts[1], parts[2], parts[3]);
         service.watch(request);
@@ -133,7 +138,7 @@ public final class SubscriptionsCommand implements Callable<Integer> {
     /**
      * Проверяет тикер и сообщает, существовала ли отменяемая подписка.
      */
-    private void remove(String value, QuoteSubscriptionService service) {
+    private void remove(String value, QuoteSubscriptions service) {
         SubscriptionTicker ticker = new SubscriptionTicker(value);
         boolean removed = service.remove(ticker);
         System.out.println(removed ? "Подписка удалена: " + ticker.value()

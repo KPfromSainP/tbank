@@ -257,7 +257,23 @@ MARKET_PULSE_CLIENT=HTTP_CLIENT java -cp <classpath> academy.backend.market_puls
 Команда требует контракт `InterruptibleTInvestApiClient`: параллельные запросы и прерываемое ожидание.
 Из трёх учебных реализаций его поддерживает `HTTP_CLIENT`; при `URL_CONNECTION` или `REACTOR`
 команда сообщает об ошибке до начала сессии. Другая реализация с тем же контрактом тоже допустима.
-`--workers` — положительное число платформенных работников, по умолчанию `3`.
+`--workers` — положительное число платформенных worker-потоков, по умолчанию `3`.
+`--engine` выбирает этап рефакторинга, по умолчанию `executor`.
+
+| Engine | Реализация | Передача и отмена задачи |
+|--------|------------|-------------------------|
+| `treiber` | `QuoteSubscriptionService` + `TreiberThreadPool` | LIFO-стек, `park/unpark`, interrupt текущего runner |
+| `queue` | `QuoteSubscriptionService` + `QueueThreadPool` | FIFO `LinkedBlockingQueue`, `take`, interrupt текущего runner |
+| `executor` | `ExecutorQuoteSubscriptionService` | Scheduler + фиксированный пул, `Future.cancel(true)` |
+
+```bash
+MARKET_PULSE_CLIENT=HTTP_CLIENT java -cp <classpath> academy.backend.market_pulse.Main subscriptions --engine treiber
+MARKET_PULSE_CLIENT=HTTP_CLIENT java -cp <classpath> academy.backend.market_pulse.Main subscriptions --engine queue
+MARKET_PULSE_CLIENT=HTTP_CLIENT java -cp <classpath> academy.backend.market_pulse.Main subscriptions --engine executor
+```
+
+Общий контракт `QuoteSubscriptions` принимает те же проверенные DTO и публикует те же результаты.
+`remove` отменяет одну подписку, а `close` завершает все фоновые потоки.
 
 После запуска вводить в консоли процесса:
 
@@ -280,7 +296,8 @@ exit
 Если истёкшая задача ещё ждёт worker в стеке, тикер можно зарегистрировать заново;
 старая задача будет пропущена при извлечении. Выполняющийся запрос удерживает тикер до завершения.
 Каждый запрос загружает каталог целиком и выбирает котировку по тикеру, результат печатается
-как `[SBER] 250.00`. Пул использует LIFO, поэтому порядок обработки разных подписок не гарантирован.
+как `[SBER] 250.00`. У `treiber` ожидающие задачи идут в LIFO-порядке, у `queue` и `executor` — в FIFO-порядке.
+При нескольких worker порядок завершения запросов зависит от времени ответа сервера.
 
 Сервис передаёт обработчику `SubscriptionResult.PriceUpdate` или `SubscriptionResult.Failure`.
 Цена остаётся числом, ошибка сохраняет исходное исключение; текст формирует CLI.
@@ -331,3 +348,32 @@ java -jar target/jcstress.jar -t 'academy.backend.market_pulse.jmm.PublicationVo
 Для всех опытов заменить фильтр `-t` на `'academy.backend.market_pulse.jmm.*'`.
 Отчёт — `jcstress/results/index.html`. Пример опыта, интерпретация отчёта и результаты:
 [Эксперименты JMM](materials/seminar10/Эксперименты%20JMM.md).
+
+
+## Материалы семинара 11
+
+Готовые примеры синхронизаторов, concurrent collections, executor и ForkJoinPool расположены
+в тестовом пакете `academy.backend.market_pulse.demo.concurrency`. Запуск из IDE или из корня:
+
+```bash
+mvn -pl advanced -am -Dtest=SynchronizersDemoTest,ConcurrentCollectionsDemoTest,ExecutorFrameworkDemoTest,ForkJoinArrayDemoTest,ForkJoinKitchenDemoTest -Dsurefire.failIfNoSpecifiedTests=false test
+```
+
+Упражнения запускаются отдельно и содержат TODO для решения на занятии.
+В исходном состоянии их проверки завершаются ошибками, обычный `mvn test` их не включает.
+
+```bash
+mvn -pl advanced -Dtest=SynchronizationExercises test
+mvn -pl advanced -Dtest=ExecutorExercises test
+```
+
+Пример анализа котировок через ForkJoinPool после компиляции приложения:
+
+```bash
+java -cp <classpath> academy.backend.market_pulse.demo.concurrency.ForkJoinQuotesDemo
+```
+
+Порядок показа и связь кода с темами презентации приведены в
+[шпаргалке семинара 11](materials/seminar11/Порядок%20показа%20кода.md),
+а этапы самостоятельного рефакторинга подписок — в [практике](materials/seminar11/Практика.md).
+Сохранённые результаты сравнения Map находятся в [отчёте JMH](materials/seminar11/JMH%20—%20результаты.md).

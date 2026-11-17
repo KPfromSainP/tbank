@@ -23,7 +23,11 @@ import java.util.concurrent.atomic.AtomicInteger;
 import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.ValueSource;
+import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.Arguments;
+import academy.backend.market_pulse.dto.subscription.SubscriptionEngine;
+import java.util.Arrays;
+import java.util.stream.Stream;
 
 /**
  * Проверяет отмену настоящего HTTP-клиента сервиса до получения тела ответа.
@@ -31,8 +35,8 @@ import org.junit.jupiter.params.provider.ValueSource;
 @Timeout(10)
 class SubscriptionHttpTest {
     @ParameterizedTest
-    @ValueSource(booleans = {false, true})
-    void cancellationInterruptsHttpBeforeResponseBodyArrives(boolean remove) throws Exception {
+    @MethodSource("enginesAndCancellationModes")
+    void cancellationInterruptsHttpBeforeResponseBodyArrives(SubscriptionEngine engine, boolean remove) throws Exception {
         HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         CountDownLatch request = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);
@@ -66,7 +70,7 @@ class SubscriptionHttpTest {
             var client = new HttpClientTInvestApiClient(new TInvestApiProperties("127.0.0.1",
                     server.getAddress().getPort(), Duration.ofSeconds(2), Duration.ofSeconds(5)));
             var output = new java.util.concurrent.CopyOnWriteArrayList<SubscriptionResult>();
-            QuoteSubscriptionService service = new QuoteSubscriptionService(
+            QuoteSubscriptions service = QuoteSubscriptions.create(engine,
                     new SubscriptionConfig(1), client, line -> {
                         output.add(line);
                         nextResult.countDown();
@@ -94,5 +98,9 @@ class SubscriptionHttpTest {
         } finally {
             server.stop(0);
         }
+    }
+    static Stream<Arguments> enginesAndCancellationModes() {
+        return Arrays.stream(SubscriptionEngine.values())
+                .flatMap(engine -> Stream.of(Arguments.of(engine, false), Arguments.of(engine, true)));
     }
 }

@@ -17,7 +17,11 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
+import academy.backend.market_pulse.client.InterruptibleTInvestApiClient;
+import academy.backend.market_pulse.dto.subscription.SubscriptionEngine;
+import java.util.function.Consumer;
 import org.junit.jupiter.api.Timeout;
 
 /**
@@ -25,14 +29,15 @@ import org.junit.jupiter.api.Timeout;
  */
 @Timeout(10)
 class QuoteSubscriptionServiceTest {
-    @Test
-    void removeWaitsForTheAlreadyStartedPublication() throws Exception {
+    @ParameterizedTest
+    @EnumSource(SubscriptionEngine.class)
+    void removeWaitsForTheAlreadyStartedPublication(SubscriptionEngine engine) throws Exception {
         CountDownLatch publishing = new CountDownLatch(1);
         CountDownLatch cancellationSeen = new CountDownLatch(1);
         CountDownLatch releaseOutput = new CountDownLatch(1);
         CountDownLatch removeReturned = new CountDownLatch(1);
         AtomicBoolean removed = new AtomicBoolean();
-        try (var service = new QuoteSubscriptionService(new SubscriptionConfig(1),
+        try (var service = createService(engine, new SubscriptionConfig(1),
                 SubscriptionTestClient.from(() -> BigDecimal.ONE), result -> {
                     publishing.countDown();
                     boolean interrupted = false;
@@ -65,11 +70,12 @@ class QuoteSubscriptionServiceTest {
         }
     }
 
-    @Test
-    void publishesPriceAsDataWithoutConsoleFormatting() throws Exception {
+    @ParameterizedTest
+    @EnumSource(SubscriptionEngine.class)
+    void publishesPriceAsDataWithoutConsoleFormatting(SubscriptionEngine engine) throws Exception {
         AtomicReference<SubscriptionResult> result = new AtomicReference<>();
         CountDownLatch published = new CountDownLatch(1);
-        try (var service = new QuoteSubscriptionService(new SubscriptionConfig(1),
+        try (var service = createService(engine, new SubscriptionConfig(1),
                 SubscriptionTestClient.from(() -> new BigDecimal("250.00")), value -> {
                     result.set(value);
                     published.countDown();
@@ -81,12 +87,13 @@ class QuoteSubscriptionServiceTest {
         }
     }
 
-    @Test
-    void publishesTheOriginalFailureInsteadOfItsMessage() throws Exception {
+    @ParameterizedTest
+    @EnumSource(SubscriptionEngine.class)
+    void publishesTheOriginalFailureInsteadOfItsMessage(SubscriptionEngine engine) throws Exception {
         RuntimeException failure = new IllegalStateException("network failed");
         AtomicReference<SubscriptionResult> result = new AtomicReference<>();
         CountDownLatch published = new CountDownLatch(1);
-        try (var service = new QuoteSubscriptionService(new SubscriptionConfig(1),
+        try (var service = createService(engine, new SubscriptionConfig(1),
                 SubscriptionTestClient.from(() -> { throw failure; }), value -> {
                     result.set(value);
                     published.countDown();
@@ -100,14 +107,15 @@ class QuoteSubscriptionServiceTest {
         }
     }
 
-    @Test
-    void duplicateWatchLeavesTheOriginalRequestRunning() throws Exception {
+    @ParameterizedTest
+    @EnumSource(SubscriptionEngine.class)
+    void duplicateWatchLeavesTheOriginalRequestRunning(SubscriptionEngine engine) throws Exception {
         CountDownLatch started = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);
         CountDownLatch result = new CountDownLatch(1);
         AtomicInteger calls = new AtomicInteger();
         List<SubscriptionResult> output = new CopyOnWriteArrayList<>();
-        try (var service = new QuoteSubscriptionService(new SubscriptionConfig(1),
+        try (var service = createService(engine, new SubscriptionConfig(1),
                 SubscriptionTestClient.from(() -> {
                     calls.incrementAndGet();
                     started.countDown();
@@ -131,14 +139,15 @@ class QuoteSubscriptionServiceTest {
         }
     }
 
-    @Test
-    void failingOutputIsNotCalledAgainToReportItsOwnFailure() throws Exception {
+    @ParameterizedTest
+    @EnumSource(SubscriptionEngine.class)
+    void failingOutputIsNotCalledAgainToReportItsOwnFailure(SubscriptionEngine engine) throws Exception {
         var outputFailure = new IllegalStateException("output failed");
         List<RuntimeException> taskFailures = new CopyOnWriteArrayList<>();
         List<SubscriptionResult> output = new CopyOnWriteArrayList<>();
         CountDownLatch sberOutput = new CountDownLatch(1);
         CountDownLatch gazpOutput = new CountDownLatch(1);
-        try (var service = new QuoteSubscriptionService(new SubscriptionConfig(1),
+        try (var service = createService(engine, new SubscriptionConfig(1),
                 SubscriptionTestClient.from(() -> BigDecimal.ONE), line -> {
                     output.add(line);
                     if (line.ticker().equals("SBER")) {
@@ -159,14 +168,15 @@ class QuoteSubscriptionServiceTest {
         }
     }
 
-    @Test
-    void rewatchAfterRemoveDoesNotPublishTheOldLateResponse() throws Exception {
+    @ParameterizedTest
+    @EnumSource(SubscriptionEngine.class)
+    void rewatchAfterRemoveDoesNotPublishTheOldLateResponse(SubscriptionEngine engine) throws Exception {
         CountDownLatch oldStarted = new CountDownLatch(1);
         CountDownLatch releaseOld = new CountDownLatch(1);
         CountDownLatch newResult = new CountDownLatch(1);
         AtomicInteger calls = new AtomicInteger();
         List<SubscriptionResult> output = new CopyOnWriteArrayList<>();
-        try (var service = new QuoteSubscriptionService(new SubscriptionConfig(1),
+        try (var service = createService(engine, new SubscriptionConfig(1),
                 SubscriptionTestClient.from(() -> {
                     if (calls.incrementAndGet() == 1) {
                         oldStarted.countDown();
@@ -195,13 +205,14 @@ class QuoteSubscriptionServiceTest {
         }
     }
 
-    @Test
-    void expiredQueuedTickerCanBeRegisteredAgainBeforeWorkerIsFree() throws Exception {
+    @ParameterizedTest
+    @EnumSource(SubscriptionEngine.class)
+    void expiredQueuedTickerCanBeRegisteredAgainBeforeWorkerIsFree(SubscriptionEngine engine) throws Exception {
         CountDownLatch started = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);
         CountDownLatch gazpUpdated = new CountDownLatch(1);
         AtomicInteger calls = new AtomicInteger();
-        try (var service = new QuoteSubscriptionService(new SubscriptionConfig(1),
+        try (var service = createService(engine, new SubscriptionConfig(1),
                 SubscriptionTestClient.from(() -> {
                     if (calls.incrementAndGet() == 1) {
                         started.countDown();
@@ -228,12 +239,13 @@ class QuoteSubscriptionServiceTest {
         }
     }
 
-    @Test
-    void slowOutputOfOneTickerDoesNotBlockAnotherTicker() throws Exception {
+    @ParameterizedTest
+    @EnumSource(SubscriptionEngine.class)
+    void slowOutputOfOneTickerDoesNotBlockAnotherTicker(SubscriptionEngine engine) throws Exception {
         CountDownLatch firstOutput = new CountDownLatch(1);
         CountDownLatch releaseOutput = new CountDownLatch(1);
         CountDownLatch secondOutput = new CountDownLatch(2);
-        try (var service = new QuoteSubscriptionService(new SubscriptionConfig(2),
+        try (var service = createService(engine, new SubscriptionConfig(2),
                 SubscriptionTestClient.from(() -> BigDecimal.ONE), line -> {
                     if (line.ticker().equals("SBER")) {
                         firstOutput.countDown();
@@ -254,9 +266,10 @@ class QuoteSubscriptionServiceTest {
         }
     }
 
-    @Test
-    void closePreservesCallingThreadsInterruptFlag() {
-        QuoteSubscriptionService service = new QuoteSubscriptionService(new SubscriptionConfig(1), SubscriptionTestClient.from(() -> BigDecimal.ONE), line -> {}, error -> fail("Неожиданная ошибка задачи", error));
+    @ParameterizedTest
+    @EnumSource(SubscriptionEngine.class)
+    void closePreservesCallingThreadsInterruptFlag(SubscriptionEngine engine) {
+        QuoteSubscriptions service = createService(engine, new SubscriptionConfig(1), SubscriptionTestClient.from(() -> BigDecimal.ONE), line -> {}, error -> fail("Неожиданная ошибка задачи", error));
         Thread.currentThread().interrupt();
         try {
             assertThrows(InterruptedException.class, service::close);
@@ -266,13 +279,14 @@ class QuoteSubscriptionServiceTest {
         }
     }
 
-    @Test
-    void removeInterruptsOnlyThatSubscriptionAndAllowsRegisteringAgain() throws Exception {
+    @ParameterizedTest
+    @EnumSource(SubscriptionEngine.class)
+    void removeInterruptsOnlyThatSubscriptionAndAllowsRegisteringAgain(SubscriptionEngine engine) throws Exception {
         CountDownLatch started = new CountDownLatch(1);
         CountDownLatch cancelled = new CountDownLatch(1);
         CountDownLatch otherUpdated = new CountDownLatch(1);
         AtomicInteger sberCalls = new AtomicInteger();
-        try (QuoteSubscriptionService service = new QuoteSubscriptionService(new SubscriptionConfig(2), SubscriptionTestClient.from(() -> {
+        try (QuoteSubscriptions service = createService(engine, new SubscriptionConfig(2), SubscriptionTestClient.from(() -> {
             if (sberCalls.incrementAndGet() == 1) {
                 started.countDown();
                 try {
@@ -295,14 +309,15 @@ class QuoteSubscriptionServiceTest {
         }
     }
 
-    @Test
-    void removedQueuedSubscriptionDoesNotStart() throws Exception {
+    @ParameterizedTest
+    @EnumSource(SubscriptionEngine.class)
+    void removedQueuedSubscriptionDoesNotStart(SubscriptionEngine engine) throws Exception {
         CountDownLatch busy = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);
         CountDownLatch completed = new CountDownLatch(1);
         AtomicInteger removedCalls = new AtomicInteger();
         AtomicInteger catalogueCalls = new AtomicInteger();
-        try (QuoteSubscriptionService service = new QuoteSubscriptionService(new SubscriptionConfig(1), SubscriptionTestClient.from(() -> {
+        try (QuoteSubscriptions service = createService(engine, new SubscriptionConfig(1), SubscriptionTestClient.from(() -> {
             if (catalogueCalls.incrementAndGet() == 1) {
                 busy.countDown();
                 release.await();
@@ -322,13 +337,14 @@ class QuoteSubscriptionServiceTest {
         }
     }
 
-    @Test
-    void noOverlapAndNoQueuedRequestAfterExpiry() throws Exception {
+    @ParameterizedTest
+    @EnumSource(SubscriptionEngine.class)
+    void noOverlapAndNoQueuedRequestAfterExpiry(SubscriptionEngine engine) throws Exception {
         AtomicInteger calls = new AtomicInteger();
         CountDownLatch started = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);
         List<SubscriptionResult> output = new CopyOnWriteArrayList<>();
-        try (QuoteSubscriptionService service = new QuoteSubscriptionService(new SubscriptionConfig(2), SubscriptionTestClient.from(() -> {
+        try (QuoteSubscriptions service = createService(engine, new SubscriptionConfig(2), SubscriptionTestClient.from(() -> {
             calls.incrementAndGet();
             started.countDown();
             release.await();
@@ -346,14 +362,15 @@ class QuoteSubscriptionServiceTest {
                 && update.price().compareTo(BigDecimal.TEN) == 0));
     }
 
-    @Test
-    void queuedRequestIsSkippedIfItExpiresBeforeWorkerIsFree() throws Exception {
+    @ParameterizedTest
+    @EnumSource(SubscriptionEngine.class)
+    void queuedRequestIsSkippedIfItExpiresBeforeWorkerIsFree(SubscriptionEngine engine) throws Exception {
         CountDownLatch started = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);
         CountDownLatch firstDone = new CountDownLatch(1);
         AtomicInteger expiredCalls = new AtomicInteger();
         AtomicInteger catalogueCalls = new AtomicInteger();
-        try (QuoteSubscriptionService service = new QuoteSubscriptionService(new SubscriptionConfig(1), SubscriptionTestClient.from(() -> {
+        try (QuoteSubscriptions service = createService(engine, new SubscriptionConfig(1), SubscriptionTestClient.from(() -> {
             if (catalogueCalls.incrementAndGet() == 1) {
                 started.countDown();
                 release.await();
@@ -373,13 +390,14 @@ class QuoteSubscriptionServiceTest {
         }
     }
 
-    @Test
-    void errorsAreRetriedAndExitInterruptsRequest() throws Exception {
+    @ParameterizedTest
+    @EnumSource(SubscriptionEngine.class)
+    void errorsAreRetriedAndExitInterruptsRequest(SubscriptionEngine engine) throws Exception {
         AtomicInteger calls = new AtomicInteger();
         CountDownLatch retryStarted = new CountDownLatch(1);
         CountDownLatch interrupted = new CountDownLatch(1);
         List<SubscriptionResult> output = new CopyOnWriteArrayList<>();
-        QuoteSubscriptionService service = new QuoteSubscriptionService(new SubscriptionConfig(1), SubscriptionTestClient.from(() -> {
+        QuoteSubscriptions service = createService(engine, new SubscriptionConfig(1), SubscriptionTestClient.from(() -> {
             if (calls.incrementAndGet() == 1) { throw new IllegalStateException("network failed"); }
             retryStarted.countDown();
             try { Thread.sleep(60_000); } catch (InterruptedException e) { interrupted.countDown(); throw e; }
@@ -396,5 +414,10 @@ class QuoteSubscriptionServiceTest {
         assertTrue(interrupted.await(1, TimeUnit.SECONDS));
         assertThrows(IllegalStateException.class,
                 () -> service.watch(new SubscriptionRequest("GAZP", Duration.ofSeconds(1), Duration.ofSeconds(1))));
+    }
+    private static QuoteSubscriptions createService(SubscriptionEngine engine, SubscriptionConfig config,
+            InterruptibleTInvestApiClient client, SubscriptionResultHandler resultHandler,
+            Consumer<RuntimeException> onTaskFailure) {
+        return QuoteSubscriptions.create(engine, config, client, resultHandler, onTaskFailure);
     }
 }

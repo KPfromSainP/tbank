@@ -21,7 +21,7 @@ import java.util.function.Consumer;
  * Команды watch, remove и close вызываются последовательно из потока CLI.
  * Параллельные вызовы этих команд не входят в контракт учебного сервиса.
  */
-public final class QuoteSubscriptionService implements AutoCloseable {
+public final class QuoteSubscriptionService implements QuoteSubscriptions {
     /**
      * Верхняя граница ожидания dispatcher, если ближайшего запроса пока нет.
      */
@@ -33,7 +33,7 @@ public final class QuoteSubscriptionService implements AutoCloseable {
     /**
      * Платформенные worker-потоки, выполняющие сетевые запросы вне потока dispatcher.
      */
-    private final TreiberThreadPool pool;
+    private final TaskPool pool;
     /**
      * Единственный поток, который выбирает подписки с наступившим сроком запуска.
      */
@@ -62,8 +62,17 @@ public final class QuoteSubscriptionService implements AutoCloseable {
                                     Consumer<RuntimeException> onTaskFailure) {
         this.client = Objects.requireNonNull(client);
         this.resultHandler = Objects.requireNonNull(resultHandler);
-        // NOTICE: сбой получателя результатов идёт в отдельный канал, не обратно в тот же callback.
         this.pool = new TreiberThreadPool(config.workers(), onTaskFailure);
+        this.dispatcher = Thread.ofPlatform()
+                .name("quote-dispatcher")
+                .start(this::dispatch);
+    }
+
+    QuoteSubscriptionService(TaskPool pool, InterruptibleTInvestApiClient client,
+                                    SubscriptionResultHandler resultHandler) {
+        this.client = Objects.requireNonNull(client);
+        this.resultHandler = Objects.requireNonNull(resultHandler);
+        this.pool = Objects.requireNonNull(pool);
         this.dispatcher = Thread.ofPlatform()
                 .name("quote-dispatcher")
                 .start(this::dispatch);
