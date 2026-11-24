@@ -51,8 +51,7 @@ class SynchronizationExercises {
 
     private static <T> T awaitItem(java.util.concurrent.BlockingQueue<T> queue)
             throws InterruptedException {
-        // TODO: дождитесь элемента, сохранив возможность прервать ожидание.
-        return queue.poll();
+        return queue.take();
     }
 
     @Test
