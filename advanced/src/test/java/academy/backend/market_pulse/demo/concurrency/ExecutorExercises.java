@@ -20,13 +20,11 @@ import org.junit.jupiter.api.Timeout;
 @Timeout(10)
 class ExecutorExercises {
     private static <T> Future<T> start(ExecutorService executor, Callable<T> task) {
-        // TODO: передайте Callable в executor и верните объект результата.
-        throw new UnsupportedOperationException("Реализуйте отправку Callable");
+        return executor.submit(task);
     }
 
     private static void stop(Future<?> task) {
-        // TODO: запросите отмену с прерыванием выполняющейся задачи.
-        task.cancel(false);
+        task.cancel(true);
     }
 
     @Test
